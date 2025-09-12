@@ -1,4 +1,6 @@
+# ========================
 # Python
+# ========================
 __pycache__/
 *.py[cod]
 *.pyo
@@ -6,20 +8,45 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-
-# Virtualenv
 .venv/
 env/
 venv/
 
-# Switch builds
+# ========================
+# Switch builds (libnx, hacBrewPack)
+# ========================
 *.nsp
 *.nro
 *.nso
 *.elf
+*.nacp
 *.o
 *.d
 
-# IDEs
+# Stub working files
+stub/romfs/
+
+# HacBrewPack outputs
+*.pfs0
+*.nca
+*.tik
+*.cert
+*.xml
+exefs/
+exefs.nsp/
+exefs.nca/
+exefs.bin
+romfs.bin
+
+# ========================
+# Project outputs
+# ========================
+out/
+
+# ========================
+# IDEs & editors
+# ========================
 .vscode/
 .idea/
+*.swp
+*~
