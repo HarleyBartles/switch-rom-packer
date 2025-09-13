@@ -23,8 +23,10 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from PIL import Image
 from typing import List, Set
 
+from icons import get_icon_file
 from packer.system_detect import detect_libretro_folder
 from packer.systems import (
     load_pinned_snapshot,
@@ -70,6 +72,7 @@ class BuildConfig:
     icon_dir: Path | None
     app_title_template: str
     dry_run: bool
+    debug_icons: bool = False
 
 
 # ---------- utility ----------
@@ -118,9 +121,16 @@ def write_text(path: Path, content: str, dry_run: bool) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def run_make_with_stub(stub_dir: Path, app_title: str,
-                       app_author: str, app_version: str,
-                       dry_run: bool) -> Path:
+def run_make_with_stub(
+    stub_dir: Path,
+    app_title: str,
+    app_author: str,
+    app_version: str,
+    dry_run: bool,
+    platform_bucket: str = "",
+    alt_titles: list[str] = None,
+    debug_icons: bool = False,
+) -> Path:
     target_name = stub_dir.name
     nro_path = stub_dir / f"{target_name}.nro"
 
@@ -129,17 +139,50 @@ def run_make_with_stub(stub_dir: Path, app_title: str,
     env["APP_AUTHOR"] = app_author
     env["APP_VERSION"] = app_version
 
+    icon_arg = None
+    if platform_bucket:
+        # 1) fetch (cached) icon as a file (png/jpg — we don't care)
+        fetched_icon = get_icon_file(app_title, platform_bucket, alt_titles or [], debug=debug_icons)
+
+        # 2) re-encode into a local stub icon.jpg (RGB, 256x256)
+        local_icon = stub_dir / "icon.jpg"
+        if not dry_run:
+            img = Image.open(fetched_icon)
+            # enforce 256x256 RGB JPEG without alpha
+            if img.size != (256, 256):
+                img = img.convert("RGBA")
+                side = max(img.width, img.height)
+                canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+                canvas.paste(img, ((side - img.width)//2, (side - img.height)//2))
+                img = canvas.resize((256, 256), Image.LANCZOS)
+            img = img.convert("RGB")
+            img.save(local_icon, format="JPEG", quality=92)
+        else:
+            print(f"[dry-run] write {local_icon} (JPEG 256x256)")
+
+        # 3) pass icon *by name* on the make cmdline (relative to stub_dir)
+        icon_arg = "ICON=icon.jpg"
+        if debug_icons:
+            print(f"[icons] using local stub icon: {local_icon}")
+
     if dry_run:
-        print(f"[dry-run] (cd {stub_dir}) make clean && make")
+        if icon_arg:
+            print(f"[dry-run] (cd {stub_dir}) make clean {icon_arg} && make {icon_arg}")
+        else:
+            print(f"[dry-run] (cd {stub_dir}) make clean && make")
         return nro_path
 
-    subprocess.run(["make", "clean"], cwd=str(stub_dir), check=True, env=env)
-    subprocess.run(["make"], cwd=str(stub_dir), check=True, env=env)
+    # IMPORTANT: pass ICON on the command line
+    if icon_arg:
+        subprocess.run(["make", "clean", icon_arg], cwd=str(stub_dir), check=True, env=env)
+        subprocess.run(["make", icon_arg], cwd=str(stub_dir), check=True, env=env)
+    else:
+        subprocess.run(["make", "clean"], cwd=str(stub_dir), check=True, env=env)
+        subprocess.run(["make"], cwd=str(stub_dir), check=True, env=env)
 
     if not nro_path.exists():
         raise RuntimeError(f"Expected NRO not found: {nro_path}")
     return nro_path
-
 
 # ---------- core flow ----------
 
@@ -211,7 +254,22 @@ def build_filelist_and_optionally_nro(cfg: BuildConfig) -> None:
             elif stub_icon.exists() and not cfg.dry_run:
                 stub_icon.unlink()
 
-            nro_src = run_make_with_stub(cfg.stub_dir, app_title, cfg.app_author, cfg.app_version, cfg.dry_run)
+            raw_title = rom.stem
+            alt_titles = [raw_title]
+            if "(" in raw_title and raw_title.endswith(")"):
+                alt_titles.append(raw_title[: raw_title.rfind("(")].strip())
+            alt_titles.append(raw_title.replace("_", " ").replace("-", " "))
+
+            nro_src = run_make_with_stub(
+                cfg.stub_dir,
+                app_title,
+                cfg.app_author,
+                cfg.app_version,
+                cfg.dry_run,
+                platform_bucket=platform_folder,
+                alt_titles=alt_titles,
+                debug_icons=cfg.debug_icons,
+            )
 
             safe_name = "".join(ch for ch in app_title if ch.isalnum() or ch in (" ", "-", "_")).strip() or "app"
             nro_dst = out_nro_dir / f"{safe_name}.nro"
@@ -254,6 +312,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    default="{title}",
                    help="hbmenu title template: {title}, {system}, {filename}")
     p.add_argument("--dry-run", action="store_true", help="Print actions without writing/copying/building.")
+    p.add_argument("--debug-icons", action="store_true",
+               help="Print which icon candidates matched and their confidence scores.")
+
     return p
 
 
@@ -275,6 +336,7 @@ def main() -> None:
         icon_dir=Path(args.icon_dir).expanduser().resolve() if args.icon_dir else None,
         app_title_template=args.app_title_template,
         dry_run=args.dry_run,
+        debug_icons=args.debug_icons,
     )
 
     try:

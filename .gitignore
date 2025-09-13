@@ -27,6 +27,8 @@ filelist.txt
 
 # Stub working files
 stub/romfs/
+stub/icon.jpg
+stub/icon.png
 
 # HacBrewPack outputs
 *.pfs0

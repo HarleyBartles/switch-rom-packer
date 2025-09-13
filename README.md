@@ -51,6 +51,25 @@ python3 packer.py ~/rom_input/
 
 ---
 
+## Setup
+
+It’s recommended to use a Python virtual environment to keep dependencies isolated.
+
+```bash
+# create a venv in the project root (only once)
+python3 -m venv .venv
+
+# activate it
+# on Linux/macOS:
+source .venv/bin/activate
+# on Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+
+# install dependencies into the venv
+pip install -r requirements.txt
+
+---
+
 ## Usage (packer.py)
 
 ```
