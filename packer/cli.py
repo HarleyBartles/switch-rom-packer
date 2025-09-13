@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from packer.discovery.detect import discover_roms
 from packer.metadata.titles import parse_rom_title
 from packer.icons.match import find_icon_with_alts
-from packer.io.fsutil import clean_dir
 from packer.io.filelist import write_filelist
 from packer.build.hbmenu import build_nro_for_rom
 
@@ -15,6 +15,27 @@ from packer.build.hbmenu import build_nro_for_rom
 DEFAULT_STUB_DIR = Path(__file__).resolve().parent.parent / "stub"
 DEFAULT_OUT_DIR = Path(__file__).resolve().parent.parent / "out"
 DEFAULT_FILELIST = Path(__file__).resolve().parent.parent / "filelist.txt"
+
+
+def _prepare_romfs_for_single_rom(stub_dir: Path, platform: str, rom_path: Path) -> None:
+    """
+    Wipe stub/romfs, copy the ROM in, and write a one-line TAB-delimited manifest:
+        "<platform>\t<romfilename>\n"
+    """
+    romfs_dir = stub_dir / "romfs"
+    if romfs_dir.exists():
+        shutil.rmtree(romfs_dir)
+    romfs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Copy this ROM into RomFS (the stub will copy it out on first boot)
+    shutil.copy2(rom_path, romfs_dir / rom_path.name)
+
+    # TAB-delimited avoids the "Bad manifest line" when names contain spaces
+    (romfs_dir / "filelist.txt").write_text(
+        f"{platform}\t{rom_path.name}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -42,10 +63,6 @@ def main(argv: list[str] | None = None) -> None:
         print(f"[packer] No ROMs found under {rom_root}")
         return
 
-    # Prepare RomFS inputs
-    romfs_dir = stub_dir / "romfs"
-    clean_dir(romfs_dir)
-
     entries_for_filelist: List[Tuple[str, str]] = []
     items: List[Dict[str, Any]] = []
 
@@ -60,9 +77,6 @@ def main(argv: list[str] | None = None) -> None:
         })
         entries_for_filelist.append((platform, rom_path.name))
 
-        # Copy ROM into RomFS (so stub runtime sees it)
-        (romfs_dir / rom_path.name).write_bytes(rom_path.read_bytes())
-
         # Debug logging
         if alt_titles:
             preview = ", ".join(alt_titles[:4]) + ("..." if len(alt_titles) > 4 else "")
@@ -70,9 +84,9 @@ def main(argv: list[str] | None = None) -> None:
         else:
             print(f"[titles] {rom_path.name} -> title='{canonical_title}' (no alts)")
 
-    # Write filelist.txt (repo root and RomFS copy)
+    # Optional: write a combined filelist at repo root for inspection.
+    # The actual stub uses a per-ROM filelist written just before each build.
     write_filelist(filelist_out, entries_for_filelist)
-    (romfs_dir / "filelist.txt").write_text(filelist_out.read_text(encoding="utf-8"), encoding="utf-8")
 
     print("Calculating metadata...")
 
@@ -86,8 +100,9 @@ def main(argv: list[str] | None = None) -> None:
 
         icon_path = find_icon_with_alts(platform, hb_title, alt_titles)
 
-        print(f"Writing {romfs_dir / rom_path.name} to RomFS image...")
-        print(f"Writing {romfs_dir / 'filelist.txt'} to RomFS image...")
+        # Prepare a fresh RomFS containing only THIS ROM and a one-line TAB-delimited manifest
+        _prepare_romfs_for_single_rom(stub_dir, platform, rom_path)
+
         if args.build_nro:
             nro_out = build_nro_for_rom(stub_dir, out_dir, platform, rom_path, hb_title, icon_path)
             print(f"[{idx}/{total}] Built NRO for {hb_title} -> {nro_out}")
