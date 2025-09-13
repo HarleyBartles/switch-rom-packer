@@ -6,7 +6,7 @@ import json
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from packer.systems import fetch_live_libretro_folders
+from packer.discovery.systems import fetch_live_libretro_folders
 
 def main():
     ap = argparse.ArgumentParser()

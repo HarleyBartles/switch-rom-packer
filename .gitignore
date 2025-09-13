@@ -7,7 +7,8 @@ __pycache__/
 *.pyd
 *.egg-info/
 dist/
-build/
+# Only ignore the top-level build dir, not packer/build
+/build/
 .venv/
 env/
 venv/
@@ -29,6 +30,8 @@ filelist.txt
 stub/romfs/
 stub/icon.jpg
 stub/icon.png
+stub/build/
+stub/build/*
 
 # HacBrewPack outputs
 *.pfs0
