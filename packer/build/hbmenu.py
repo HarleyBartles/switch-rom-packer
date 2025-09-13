@@ -13,6 +13,25 @@ from PIL import Image, ImageDraw, ImageFont  # Pillow
 from packer.io.fsutil import clean_dir
 
 
+def _ensure_256_jpeg(src: Path, dest: Path) -> Path:
+    try:
+        img = Image.open(src).convert("RGB")
+        # cover-fit & center-crop to 256
+        w, h = img.size
+        size = 256
+        scale = max(size / max(w, 1), size / max(h, 1))
+        nw, nh = int(w * scale), int(h * scale)
+        img = img.resize((nw, nh), Image.LANCZOS)
+        left = (nw - size) // 2
+        top = (nh - size) // 2
+        img = img.crop((left, top, left + size, top + size))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        img.save(dest, format="JPEG", quality=92)
+        return dest
+    except Exception:
+        return src
+
+
 def _sanitize_title_for_filename(title: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9 _.\-]", "", title)
     safe = re.sub(r"\s+", " ", safe).strip()
@@ -105,15 +124,21 @@ def _is_valid_icon(path: Path) -> bool:
 
 
 def _resolve_icon_env(stub_dir: Path, icon_path: Optional[Path], hb_title: str) -> str:
+    """
+    Return a filesystem path to a JPEG icon to pass as APP_ICON.
+    - If icon_path is a valid JPEG, just return it (no copy into stub/).
+    - Otherwise, generate initials into stub/icon.jpg and return that.
+    """
+    if icon_path and icon_path.exists() and _is_valid_icon(icon_path):
+        # If not guaranteed 256x256 JPEG, normalize into stub/icon.jpg
+        normalized = stub_dir / "icon.jpg"
+        out = _ensure_256_jpeg(icon_path, normalized)
+        
+        print(f"[icons] using ICON file: {out}")
+        return str(out)
+
+    # Fallback: generate deterministic initials icon in stub
     dest = stub_dir / "icon.jpg"
-
-    if icon_path and _is_valid_icon(icon_path):
-        data = Path(icon_path).read_bytes()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
-        print(f"[icons] using provided icon -> {dest}")
-        return str(dest)
-
     _generate_initials_icon_jpeg(dest, hb_title, size=256)
     return str(dest)
 
@@ -134,6 +159,12 @@ def build_nro_for_rom(
     out_dir = Path(out_dir)
     romfs_dir = stub_dir / "romfs"
 
+    # 1) Clean first, so we don't lose icon/romfs later.
+    if make_clean:
+        print("clean ...")
+        subprocess.run(["make", "clean"], cwd=stub_dir, check=False, env=os.environ.copy())
+
+    # 2) Prepare RomFS after clean.
     if not romfs_dir.exists():
         clean_dir(romfs_dir)
 
@@ -141,22 +172,23 @@ def build_nro_for_rom(
     if not dest_rom.exists():
         dest_rom.write_bytes(rom_path.read_bytes())
 
+    # 3) Resolve APP_* env (icon AFTER clean so it survives).
     env = os.environ.copy()
     env["APP_TITLE"] = hb_title
     env["APP_AUTHOR"] = author
     env["APP_VERSION"] = version
 
+    # IMPORTANT: point APP_ICON at a stable path (cache) when possible.
     env["APP_ICON"] = _resolve_icon_env(stub_dir, icon_path, hb_title)
+    print(f"[icons] using provided icon -> {env['APP_ICON']}")
 
-    if make_clean:
-        print("clean ...")
-        subprocess.run(["make", "clean"], cwd=stub_dir, check=False, env=env)
-
+    # 4) Build
     rc = subprocess.run(["make"], cwd=stub_dir, env=env)
     if rc.returncode != 0:
         print(f"[error] make failed with exit code {rc.returncode}")
         sys.exit(rc.returncode)
 
+    # 5) Move resulting NRO
     nro_dir = out_dir / "nro"
     nro_dir.mkdir(parents=True, exist_ok=True)
     safe_title = _sanitize_title_for_filename(hb_title)

@@ -128,17 +128,21 @@ else
 endif
 
 # -- ICON autodetection (.png or .jpg) -----------------------------------------
+# Respect env-provided APP_ICON if ICON isn't explicitly set
 ifeq ($(strip $(ICON)),)
-  # Prefer <TARGET>.png/jpg, then icon.png/jpg
-  icons_png := $(wildcard $(TARGET).png icon.png)
-  icons_jpg := $(wildcard $(TARGET).jpg icon.jpg)
-  ifneq ($(strip $(icons_png)),)
-    export APP_ICON := $(TOPDIR)/$(firstword $(icons_png))
-  else
-    ifneq ($(strip $(icons_jpg)),)
-      export APP_ICON := $(TOPDIR)/$(firstword $(icons_jpg))
+  # Only auto-detect if APP_ICON wasn't provided from environment/caller
+  ifeq ($(origin APP_ICON), undefined)
+    # Prefer <TARGET>.png/jpg, then icon.png/jpg
+    icons_png := $(wildcard $(TARGET).png icon.png)
+    icons_jpg := $(wildcard $(TARGET).jpg icon.jpg)
+    ifneq ($(strip $(icons_png)),)
+      export APP_ICON := $(TOPDIR)/$(firstword $(icons_png))
     else
-      export APP_ICON := $(LIBNX)/default_icon.jpg
+      ifneq ($(strip $(icons_jpg)),)
+        export APP_ICON := $(TOPDIR)/$(firstword $(icons_jpg))
+      else
+        export APP_ICON := $(LIBNX)/default_icon.jpg
+      endif
     endif
   endif
 else
@@ -147,11 +151,12 @@ endif
 
 # -- NRO/NACP flags ------------------------------------------------------------
 ifeq ($(strip $(NO_ICON)),)
-  export NROFLAGS += --icon=$(APP_ICON)
+  # Quote the path to survive spaces
+  export NROFLAGS += --icon="$(APP_ICON)"
 endif
 
 ifeq ($(strip $(NO_NACP)),)
-  export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
+  export NROFLAGS += --nacp="$(CURDIR)/$(TARGET).nacp"
 endif
 
 ifneq ($(APP_TITLEID),)
@@ -170,7 +175,7 @@ ifneq ($(strip $(APP_VERSION)),)
 endif
 
 ifneq ($(ROMFS),)
-  export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
+  export NROFLAGS += --romfsdir="$(CURDIR)/$(ROMFS)"
 endif
 
 .PHONY: $(BUILD) clean all
@@ -186,9 +191,9 @@ $(BUILD):
 clean:
 	@echo clean ...
 ifeq ($(strip $(APP_JSON)),)
-	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@rm -fr "$(BUILD)" "$(TARGET).nro" "$(TARGET).nacp" "$(TARGET).elf"
 else
-	@rm -fr $(BUILD) $(TARGET).nsp $(TARGET).nso $(TARGET).npdm $(TARGET).elf
+	@rm -fr "$(BUILD)" "$(TARGET).nsp" "$(TARGET).nso" "$(TARGET).npdm" "$(TARGET).elf"
 endif
 
 #---------------------------------------------------------------------------------
