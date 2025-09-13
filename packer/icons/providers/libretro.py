@@ -131,6 +131,10 @@ def _download_bytes(url: str) -> Optional[bytes]:
 
 
 def _cover_fit_center_crop_to_square(img: Image.Image, size: int = 256) -> Image.Image:
+    """
+    Old behavior: scale to cover then center-crop to exact square.
+    Keeps image edge-to-edge but can cut off content.
+    """
     w, h = img.size
     if w == 0 or h == 0:
         return img.convert("RGB").resize((size, size))
@@ -144,12 +148,46 @@ def _cover_fit_center_crop_to_square(img: Image.Image, size: int = 256) -> Image
     return img.crop((left, top, right, bottom)).convert("RGB")
 
 
-def _png_bytes_to_jpeg_file(png_bytes: bytes, dest: Path) -> bool:
+def _letterbox_fit_to_square(img: Image.Image, size: int = 256, bg=(0, 0, 0)) -> Image.Image:
+    """
+    New default: preserve aspect ratio and pad to exact square (letterboxing).
+    No cropping; full art is visible with blank bars where needed.
+    """
+    img = img.convert("RGB")
+    # scale to fit within size x size
+    w, h = img.size
+    if w == 0 or h == 0:
+        return Image.new("RGB", (size, size), bg)
+    # thumbnail keeps aspect ratio and ensures both dims <= size
+    img.thumbnail((size, size), Image.LANCZOS)
+    canvas = Image.new("RGB", (size, size), bg)
+    x = (size - img.width) // 2
+    y = (size - img.height) // 2
+    canvas.paste(img, (x, y))
+    return canvas
+
+
+def _png_bytes_to_jpeg_file(
+    png_bytes: bytes,
+    dest: Path,
+    *,
+    normalize_method: str = "letterbox",  # "letterbox" (default) or "crop"
+    bg=(0, 0, 0),
+) -> bool:
+    """
+    Convert the downloaded PNG bytes into a 256x256 RGB JPEG on disk.
+    normalize_method:
+      - "letterbox": preserve aspect ratio, pad to square with bg color.
+      - "crop": cover-fit then center-crop to square (legacy behavior).
+    """
     try:
         img = Image.open(BytesIO(png_bytes))
-        img = _cover_fit_center_crop_to_square(img, 256)  # ensure 256x256 RGB
+        if normalize_method == "crop":
+            norm = _cover_fit_center_crop_to_square(img, 256)
+        else:
+            norm = _letterbox_fit_to_square(img, 256, bg)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        img.save(dest, format="JPEG", quality=92)
+        norm.save(dest, format="JPEG", quality=92)
         return True
     except Exception as e:
         print(f"[icons] PNG->JPEG convert failed for {dest.name}: {e}")
@@ -270,6 +308,8 @@ def search_icon(
     debug: bool = True,
     *,
     source_name_hint: Optional[str] = None,
+    normalize_method: str = "letterbox",  # "letterbox" (default) or "crop"
+    bg=(0, 0, 0),
 ) -> Optional[Path]:
     """
     Attempt to fetch a Libretro thumbnail for this platform + title.
@@ -279,6 +319,7 @@ def search_icon(
     - Then fuzzy matches all candidates, and prefers near-ties with the preferred region.
     - Caches by Libretro source name to avoid poisoning.
     - Will *not* return a cached non-preferred region if a preferred-region icon is available.
+    - Normalizes icons to 256x256 using 'letterbox' (default) or 'crop'.
     """
     platform_url = _platform_url(platform)
     preferred_labels = _extract_region_hints(title, source_name_hint)
@@ -292,9 +333,8 @@ def search_icon(
             source_name, data = hit
             cache_jpg = _icon_cache_path(platform, source_name)
             if cache_jpg.exists():
-                # if cached is non-preferred and we can still fetch a preferred later, we’ll handle below
                 return cache_jpg
-            if _png_bytes_to_jpeg_file(data, cache_jpg):
+            if _png_bytes_to_jpeg_file(data, cache_jpg, normalize_method=normalize_method, bg=bg):
                 if debug:
                     print(f"[icons] exact icon hit in {subdir} for '{title}' -> '{source_name}'")
                 return cache_jpg
@@ -332,11 +372,9 @@ def search_icon(
                     print(f"[icons] using cached icon for '{best_raw}'")
                 return preferred_cache
 
-            # If there’s already a cached *non-preferred* region, do NOT return it;
-            # try to download preferred first.
             url = f"{_BASE_URL}/{platform_url}/{subdir}/{best_raw}.png"
             data = _download_bytes(url)
-            if data and _png_bytes_to_jpeg_file(data, preferred_cache):
+            if data and _png_bytes_to_jpeg_file(data, preferred_cache, normalize_method=normalize_method, bg=bg):
                 if debug:
                     print(f"[icons] matched '{title}' -> '{best_raw}' in {subdir} (score={best_sc:.3f})")
                 return preferred_cache
