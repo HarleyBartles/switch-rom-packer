@@ -1,332 +1,291 @@
 #!/usr/bin/env python3
 """
 packer.py
-----------
-Build Switch stub NROs from ROM files.
+Scan ROMs, auto-detect their systems, emit Libretro folder names,
+and by default build per-ROM NRO forwarders using your libnx stub.
 
-- Default: one NRO per ROM (each mode).
-- Bundle: one NRO with all ROMs, named with --bundle-name.
-- PSX: .cue pulls in its referenced .bin tracks; lone .bin is upgraded to PSX if a sibling .cue references it.
+Typical usage:
+  python3 packer.py ~/rom_input/
 
-Destination on device:
-  SD:/roms/<platform>/<romfile>
-
-Supported platform folders:
-  3ds, 32x, gb, gbc, gba, nds, psp, psx, smd, snes, nes, sms, gg, tg, sdc
+Defaults:
+- Builds per-ROM NROs (disable with --no-build-nro)
+- Stub dir: ./stub
+- Output dir: ./out
+- filelist.txt: ./filelist.txt
 """
 
+from __future__ import annotations
+
 import argparse
-import re
+import os
 import shutil
 import subprocess
+import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Dict, Set
+from typing import List, Set
 
-ROOT = Path(__file__).parent.resolve()
-STUB_DIR = ROOT / "stub"
-ROMFS_DIR = STUB_DIR / "romfs"
-OUT_DIR = ROOT / "out"
+from packer.system_detect import detect_libretro_folder
+from packer.systems import (
+    load_pinned_snapshot,
+    fetch_live_libretro_folders,
+    validate_detected_targets,
+)
 
-# Recognized ROM extensions (lowercase, no dot)
-ROM_EXTS = {
-    "smc", "sfc", "nes", "bin",
-    "gba", "gb", "gbc",
-    "gen", "md", "sms", "pce", "smd",
-    "fig", "swc",
-    "z64", "n64", "v64",
-    "gg", "nds", "3ds",
-    "iso", "cso", "cue", "gdi", "chd",
-    "32x"
+# --- Allowed extensions (same as before) ---
+ALLOWED_EXTS = {
+    ".nes", ".fds", ".sfc", ".smc", ".gb", ".gbc", ".gba", ".vb",
+    ".z64", ".n64", ".v64", ".ndd",
+    ".nds", ".dsi", ".3ds", ".cci", ".cxi",
+    ".bs", ".st", ".min",
+    ".gcm", ".iso", ".wad", ".wud", ".wux",
+    ".sg", ".sms", ".gg", ".md", ".bin", ".gen", ".smd",
+    ".chd", ".cue", ".32x",
+    ".cdi", ".gdi", ".naomi", ".pico",
+    ".m3u", ".pbp", ".cso",
+    ".ngp", ".ngc", ".npc", ".pce", ".sgx",
+    ".a26", ".a52", ".a78", ".lnx", ".vec",
+    ".d64", ".t64", ".prg", ".adf", ".ipf",
+}
+IGNORE_EXTS = {
+    ".srm", ".sav", ".state", ".st0", ".st1", ".st2",
+    ".cfg", ".ini", ".db", ".xml", ".json",
+    ".jpg", ".jpeg", ".png", ".gif", ".webp",
+    ".txt", ".nfo", ".diz", ".md",
 }
 
-# Map extensions → platform folder names
-PLATFORM_MAP = {
-    # Nintendo
-    "smc": "snes", "sfc": "snes", "swc": "snes", "fig": "snes",
-    "nes": "nes",
-    "gb": "gb",
-    "gbc": "gbc",
-    "gba": "gba",
-    "nds": "nds",
-    "3ds": "3ds",
+@dataclass
+class BuildConfig:
+    rom_root: Path
+    filelist_out: Path
+    validate_systems: bool
+    snapshot_path: Path
+    cache_path: Path
+    github_token: str | None
+    build_nro: bool
+    stub_dir: Path
+    output_dir: Path
+    app_author: str
+    app_version: str
+    icon_dir: Path | None
+    app_title_template: str
+    dry_run: bool
 
-    # Sega
-    "gen": "smd", "md": "smd", "smd": "smd",     # Genesis/Mega Drive
-    "32x": "32x",
-    "sms": "sms",       # Master System
-    "gg": "gg",         # Game Gear
-    "pce": "tg", "tg": "tg",  # TurboGrafx-16 / PC Engine
-    "gdi": "sdc", "chd": "sdc",  # Dreamcast
 
-    # Sony
-    "iso": "psp", "cso": "psp",   # PSP
-    "cue": "psx",                 # PSX (driver; brings .bin tracks)
-    # NOTE: plain ".bin" stays mapped by ext unless upgraded by a cue scan
-}
+# ---------- utility ----------
 
-def collect_roms(paths: List[str]) -> List[Path]:
+def find_roms(root: Path) -> List[Path]:
     roms: List[Path] = []
-    for raw in paths:
-        p = Path(raw).resolve()
-        if p.is_dir():
-            for f in sorted(p.iterdir()):
-                if f.is_file() and f.suffix.lower().lstrip(".") in ROM_EXTS:
-                    roms.append(f)
-        elif p.is_file() and p.suffix.lower().lstrip(".") in ROM_EXTS:
-            roms.append(p)
-        else:
-            if not p.exists():
-                print(f"⚠️ Skipping non-existent: {p}")
-    return roms
-
-# --- PSX helpers -------------------------------------------------------------
-
-def parse_cue(cue_path: Path) -> List[Path]:
-    """
-    Parse a .cue file and return a list of referenced files (usually .bin),
-    resolved relative to the .cue location. Very lightweight parsing.
-    """
-    refs: List[Path] = []
-    try:
-        text = cue_path.read_text(errors="ignore")
-    except Exception:
-        return refs
-    # FILE "xxx.bin" BINARY
-    for m in re.finditer(r'(?i)^\s*FILE\s+"([^"]+)"', text, flags=re.MULTILINE):
-        ref = m.group(1)
-        # normalize separators, resolve relative to cue
-        ref_path = (cue_path.parent / ref).resolve()
-        refs.append(ref_path)
-    return refs
-
-def index_cues(roms: List[Path]) -> Dict[Path, List[Path]]:
-    """Return mapping: cue_path -> [referenced track paths] (existing only)."""
-    cues: Dict[Path, List[Path]] = {}
-    for p in roms:
-        if p.suffix.lower() == ".cue":
-            tracks = parse_cue(p)
-            # keep only tracks that actually exist
-            tracks = [t for t in tracks if t.exists()]
-            if tracks:
-                cues[p] = tracks
-            else:
-                # even if no tracks found, still treat cue as primary PSX artifact
-                cues[p] = []
-    return cues
-
-def find_cue_for_bin(bin_path: Path) -> Path | None:
-    """
-    Try to find a sibling .cue that references this .bin.
-    Search all .cue files in the same directory and check FILE entries.
-    """
-    dirpath = bin_path.parent
-    for cue in dirpath.glob("*.cue"):
-        tracks = parse_cue(cue)
-        for t in tracks:
-            if t.resolve() == bin_path.resolve():
-                return cue
-    # fallback: stem match (game.bin ↔ game.cue)
-    guess = dirpath / (bin_path.stem + ".cue")
-    if guess.exists():
-        return guess
-    return None
-
-# --- Platform / output helpers ----------------------------------------------
-
-def infer_platform(path: Path) -> str:
-    ext = path.suffix.lower().lstrip(".")
-    return PLATFORM_MAP.get(ext, "unknown")
-
-def sanitize_name(name: str) -> str:
-    name = name.strip()
-    name = re.sub(r'[\\/:*?"<>|]+', "_", name)
-    name = re.sub(r"\s+", " ", name)
-    return name or "output"
-
-# --- RomFS + build steps -----------------------------------------------------
-
-def write_romfs_with_manifest(items: List[Tuple[Path, str]]):
-    if ROMFS_DIR.exists():
-        shutil.rmtree(ROMFS_DIR)
-    ROMFS_DIR.mkdir(parents=True)
-
-    seen: Set[str] = set()
-    lines: List[str] = []
-
-    for rp, platform in items:
-        # De-duplicate by absolute path to avoid copying same track twice
-        key = str(rp.resolve()).lower()
-        if key in seen:
+    for p in root.rglob("*"):
+        if not p.is_file():
             continue
-        seen.add(key)
+        ext = p.suffix.lower()
+        if ext in IGNORE_EXTS:
+            continue
+        if ext in ALLOWED_EXTS:
+            roms.append(p)
+    return sorted(roms)
 
-        dest = ROMFS_DIR / rp.name
-        shutil.copy2(rp, dest)
-        lines.append(f"{platform}\t{rp.name}")
-        print(f"📦 Injected {rp.name}  → platform: {platform}")
 
-    (ROMFS_DIR / "filelist.txt").write_text("\n".join(lines), encoding="utf-8")
-    print(f"📝 Wrote romfs/filelist.txt with {len(lines)} entr{'y' if len(lines)==1 else 'ies'}.")
+def safe_title_from_filename(p: Path) -> str:
+    title = p.stem
+    for needle in ("[", "]", "(", ")", "{", "}", "_", " - "):
+        title = title.replace(needle, " ")
+    title = " ".join(title.split())
+    return title[:128] if len(title) > 128 else title
 
-def build_stub(out_name: str, title: str, icon_path: Path | None = None):
-    """
-    Builds the stub with a dynamic hbmenu title (and optional icon).
-    - out_name: filename for the resulting .nro in ./out/
-    - title: NACP title shown in hbmenu
-    - icon_path: optional path to a .png/.jpg to use as hbmenu icon
-    """
-    print("🔨 Building stub...")
-    # Clean first
-    subprocess.run(["make", "clean"], cwd=STUB_DIR, check=True)
 
-    # Prepare make args with dynamic title/author/version
-    make_cmd = [
-        "make",
-        f"APP_TITLE={title}",
-        "APP_AUTHOR=switch-rom-packer",
-        "APP_VERSION=0.1.0",
-    ]
+def ensure_dir(d: Path, dry_run: bool) -> None:
+    if dry_run:
+        print(f"[dry-run] mkdir -p {d}")
+        return
+    d.mkdir(parents=True, exist_ok=True)
 
-    # Optional icon support — switch_rules expects the icon to be in stub/
-    if icon_path:
-        icon_path = icon_path.resolve()
-        if icon_path.exists():
-            dest_icon = STUB_DIR / icon_path.name
-            if dest_icon.resolve() != icon_path:
-                shutil.copy2(icon_path, dest_icon)
-            make_cmd.append(f"ICON={dest_icon.name}")
 
-    subprocess.run(make_cmd, cwd=STUB_DIR, check=True)
+def copy_file(src: Path, dst: Path, dry_run: bool) -> None:
+    if dry_run:
+        print(f"[dry-run] copy {src} -> {dst}")
+        return
+    ensure_dir(dst.parent, dry_run=False)
+    shutil.copy2(src, dst)
 
-    OUT_DIR.mkdir(exist_ok=True)
-    nro_src = STUB_DIR / "stub.nro"
-    nro_out = OUT_DIR / f"{sanitize_name(out_name)}.nro"
-    shutil.copy2(nro_src, nro_out)
-    print(f"✅ Built {nro_out} (title: {title})")
 
-# --- Orchestration -----------------------------------------------------------
+def write_text(path: Path, content: str, dry_run: bool) -> None:
+    if dry_run:
+        print(f"[dry-run] write {path} ({len(content)} bytes)")
+        return
+    ensure_dir(path.parent, dry_run=False)
+    path.write_text(content, encoding="utf-8")
 
-def expand_psx_sets(candidates: List[Path]) -> Tuple[List[Tuple[Path, List[Path]]], Set[Path]]:
-    """
-    Return:
-      - list of (cue_path, [track_paths])
-      - set of all track paths included by any cue (for skipping as standalones)
-    Only considers cues present in candidates (we also 'upgrade' lone bins later).
-    """
-    cues_map = index_cues(candidates)
-    included_bins: Set[Path] = set()
-    cue_sets: List[Tuple[Path, List[Path]]] = []
-    for cue, tracks in cues_map.items():
-        cue_sets.append((cue, tracks))
-        for t in tracks:
-            included_bins.add(t.resolve())
-    return cue_sets, included_bins
 
-def main():
-    ap = argparse.ArgumentParser(description="ROM → Switch stub packer (to SD:/roms/<platform>/<rom>)")
-    ap.add_argument("paths", nargs="+", help="ROM files or directories")
-    ap.add_argument("--mode", choices=["each", "bundle"], default="each",
-                    help="each: one NRO per ROM (default); bundle: one NRO with all ROMs")
-    ap.add_argument("--bundle-name", default=None,
-                    help="Output filename (without extension) for bundle mode")
-    ap.add_argument("--platform", default=None,
-                    help="Force platform name for ALL ROMs in this run (overrides detection)")
-    args = ap.parse_args()
+def run_make_with_stub(stub_dir: Path, app_title: str,
+                       app_author: str, app_version: str,
+                       dry_run: bool) -> Path:
+    target_name = stub_dir.name
+    nro_path = stub_dir / f"{target_name}.nro"
 
-    # Collect candidate files
-    candidates = collect_roms(args.paths)
-    if not candidates:
-        print("❌ No ROMs found.")
+    env = os.environ.copy()
+    env["APP_TITLE"] = app_title
+    env["APP_AUTHOR"] = app_author
+    env["APP_VERSION"] = app_version
+
+    if dry_run:
+        print(f"[dry-run] (cd {stub_dir}) make clean && make")
+        return nro_path
+
+    subprocess.run(["make", "clean"], cwd=str(stub_dir), check=True, env=env)
+    subprocess.run(["make"], cwd=str(stub_dir), check=True, env=env)
+
+    if not nro_path.exists():
+        raise RuntimeError(f"Expected NRO not found: {nro_path}")
+    return nro_path
+
+
+# ---------- core flow ----------
+
+def build_filelist_and_optionally_nro(cfg: BuildConfig) -> None:
+    if cfg.build_nro and not cfg.stub_dir.exists():
+        raise SystemExit(f"Stub dir not found: {cfg.stub_dir}")
+
+    roms = find_roms(cfg.rom_root)
+    if not roms:
+        print("[packer] No ROMs found.")
         return
 
-    # Build cue sets from any .cue present in inputs
-    cue_sets, bins_referenced = expand_psx_sets(candidates)
-    bins_referenced = {p.resolve() for p in bins_referenced}
+    detected_targets: Set[str] = set()
+    lines: List[str] = []
 
-    # Prepare work items for modes
-    if args.mode == "each":
-        # For each candidate:
-        # - if it's a .cue: build NRO including cue + its tracks as PSX
-        # - if it's a .bin referenced by a .cue: skip (covered by cue)
-        # - if it's a .bin with a sibling cue (even if cue not passed): upgrade to cue set
-        # - otherwise: build single-file NRO using ext mapping or forced platform
-        handled_cues: Set[Path] = set()
+    for rom in roms:
+        platform_folder = detect_libretro_folder(rom)
+        detected_targets.add(platform_folder)
+        lines.append(f"{platform_folder}\t{rom.name}")
 
-        for p in candidates:
-            ext = p.suffix.lower()
-            if ext == ".cue":
-                if p in handled_cues:
-                    continue
-                tracks = dict(cue_sets).get(p, [])
-                items = [(p, "psx")] + [(t, "psx") for t in tracks]
-                print(f"\n=== Building PSX set (CUE): {p.name} ({len(tracks)} track(s)) ===")
-                write_romfs_with_manifest(items)
-                build_stub(out_name=p.stem, title=p.stem)
-                handled_cues.add(p)
-                continue
+    write_text(cfg.filelist_out, "\n".join(lines) + "\n", cfg.dry_run)
+    print(f"[packer] Wrote {len(lines)} entries to {cfg.filelist_out}")
 
-            if ext == ".bin":
-                if p.resolve() in bins_referenced:
-                    # already included by a cue in inputs
-                    continue
-                # Try to upgrade via sibling cue
-                cue = find_cue_for_bin(p)
-                if cue and cue.exists():
-                    tracks = parse_cue(cue)
-                    tracks = [t for t in tracks if t.exists()]
-                    items = [(cue, "psx")] + [(t, "psx") for t in tracks]
-                    print(f"\n=== Upgrading BIN to PSX set via CUE: {cue.name} ({len(tracks)} track(s)) ===")
-                    write_romfs_with_manifest(items)
-                    build_stub(out_name=cue.stem, title=cue.stem)
-                    handled_cues.add(cue)
-                    continue
+    if cfg.validate_systems:
+        if cfg.snapshot_path.exists():
+            libretro_folders = load_pinned_snapshot(cfg.snapshot_path)
+        else:
+            libretro_folders = fetch_live_libretro_folders(cfg.cache_path, github_token=cfg.github_token)
+        result = validate_detected_targets(detected_targets, libretro_folders)
+        for note in result.notes:
+            print(f"[systems] {note}")
+        if not result.ok:
+            raise SystemExit(2)
 
-            # Non-PSX or un-upgraded .bin
-            plat = (args.platform or infer_platform(p)).lower()
-            print(f"\n=== Building for {p.name} → {plat} ===")
-            write_romfs_with_manifest([(p, plat)])
-            build_stub(out_name=p.stem, title=p.stem)
+    if cfg.build_nro:
+        out_nro_dir = cfg.output_dir / "nro"
+        ensure_dir(out_nro_dir, cfg.dry_run)
+        stub_romfs = cfg.stub_dir / "romfs"
 
-    else:
-        # BUNDLE: combine everything into ONE NRO
-        items: List[Tuple[Path, str]] = []
-        seen_abs: Set[Path] = set()
+        for idx, rom in enumerate(roms, 1):
+            platform_folder = detect_libretro_folder(rom)
+            app_title = cfg.app_title_template.format(
+                title=safe_title_from_filename(rom),
+                system=platform_folder,
+                filename=rom.name,
+            )
 
-        # First, include all cue sets (cue + tracks) as psx
-        for cue, tracks in cue_sets:
-            parts = [cue] + tracks
-            for x in parts:
-                xa = x.resolve()
-                if xa in seen_abs:
-                    continue
-                items.append((x, "psx"))
-                seen_abs.add(xa)
+            if not cfg.dry_run:
+                if stub_romfs.exists():
+                    shutil.rmtree(stub_romfs)
+                stub_romfs.mkdir(parents=True, exist_ok=True)
+            else:
+                print(f"[dry-run] reset {stub_romfs}")
 
-        # Then include remaining files not already part of a cue set
-        for p in candidates:
-            pa = p.resolve()
-            if pa in seen_abs:
-                continue
-            if p.suffix.lower() == ".bin":
-                # Try to upgrade via sibling cue even if cue wasn't provided
-                cue = find_cue_for_bin(p)
-                if cue and cue.exists():
-                    tracks = parse_cue(cue)
-                    tracks = [t for t in tracks if t.exists()]
-                    for x in [cue] + tracks:
-                        xa = x.resolve()
-                        if xa not in seen_abs:
-                            items.append((x, "psx"))
-                            seen_abs.add(xa)
-                    continue
-            plat = (args.platform or infer_platform(p)).lower()
-            items.append((p, plat))
-            seen_abs.add(pa)
+            write_text(stub_romfs / "filelist.txt", f"{platform_folder}\t{rom.name}\n", cfg.dry_run)
+            copy_file(rom, stub_romfs / rom.name, cfg.dry_run)
 
-        name = args.bundle_name or candidates[0].stem
-        print(f"=== Building bundle: {name} ({len(items)} files) ===")
-        write_romfs_with_manifest(items)
-        build_stub(out_name=name, title=name)
+            # icon handling
+            stub_icon = cfg.stub_dir / "icon.png"
+            icon_path = None
+            if cfg.icon_dir:
+                for ext in (".png", ".jpg", ".jpeg", ".webp"):
+                    cand = cfg.icon_dir / f"{rom.stem}{ext}"
+                    if cand.exists():
+                        icon_path = cand
+                        break
+            if icon_path:
+                copy_file(icon_path, stub_icon, cfg.dry_run)
+            elif stub_icon.exists() and not cfg.dry_run:
+                stub_icon.unlink()
+
+            nro_src = run_make_with_stub(cfg.stub_dir, app_title, cfg.app_author, cfg.app_version, cfg.dry_run)
+
+            safe_name = "".join(ch for ch in app_title if ch.isalnum() or ch in (" ", "-", "_")).strip() or "app"
+            nro_dst = out_nro_dir / f"{safe_name}.nro"
+            if cfg.dry_run:
+                print(f"[dry-run] copy {nro_src} -> {nro_dst}")
+            else:
+                shutil.copy2(nro_src, nro_dst)
+            print(f"[{idx}/{len(roms)}] Built NRO for {rom.name} -> {nro_dst}")
+
+    print("[packer] Done.")
+
+
+# ---------- CLI ----------
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Switch ROM packer: detect systems and (by default) build NRO forwarders."
+    )
+    p.add_argument("rom_root", nargs="?", default=".",
+                   help="Directory to scan for ROMs (recursively). Default: current dir")
+    p.add_argument("--filelist-out", default="filelist.txt", help="Output consolidated filelist path.")
+    p.add_argument("--validate-systems", action="store_true", help="Validate detected platforms against Libretro.")
+    p.add_argument("--libretro-snapshot", default="config/libretro_systems_snapshot.json",
+                   help="Pinned offline list of Libretro folders.")
+    p.add_argument("--libretro-cache", default=".cache/libretro_folders.json",
+                   help="Cache for live Libretro folder list (GitHub API).")
+    p.add_argument("--github-token", default=None, help="Optional GitHub token (raise API rate limit).")
+
+    p.add_argument("--no-build-nro", dest="build_nro", action="store_false",
+                   help="Disable building per-ROM NROs (default is enabled).")
+    p.set_defaults(build_nro=True)
+
+    p.add_argument("--stub-dir", default="./stub", help="Path to your libnx stub project (Makefile).")
+    p.add_argument("--output-dir", default="./out", help="Where to place outputs. Default: ./out")
+    p.add_argument("--app-author", default="switch-rom-packer", help="NACP author metadata.")
+    p.add_argument("--app-version", default="0.1.0", help="NACP version metadata.")
+    p.add_argument("--icon-dir", default=None,
+                   help="Optional folder containing per-ROM icons named <romstem>.png/.jpg/.jpeg/.webp.")
+    p.add_argument("--app-title-template",
+                   default="{title}",
+                   help="hbmenu title template: {title}, {system}, {filename}")
+    p.add_argument("--dry-run", action="store_true", help="Print actions without writing/copying/building.")
+    return p
+
+
+def main() -> None:
+    args = build_arg_parser().parse_args()
+
+    cfg = BuildConfig(
+        rom_root=Path(args.rom_root).expanduser().resolve(),
+        filelist_out=Path(args.filelist_out).resolve(),
+        validate_systems=args.validate_systems,
+        snapshot_path=Path(args.libretro_snapshot).resolve(),
+        cache_path=Path(args.libretro_cache).resolve(),
+        github_token=args.github_token,
+        build_nro=args.build_nro,
+        stub_dir=Path(args.stub_dir).expanduser().resolve(),
+        output_dir=Path(args.output_dir).expanduser().resolve(),
+        app_author=args.app_author,
+        app_version=args.app_version,
+        icon_dir=Path(args.icon_dir).expanduser().resolve() if args.icon_dir else None,
+        app_title_template=args.app_title_template,
+        dry_run=args.dry_run,
+    )
+
+    try:
+        build_filelist_and_optionally_nro(cfg)
+    except subprocess.CalledProcessError as e:
+        print(f"[error] make failed with exit code {e.returncode}")
+        sys.exit(e.returncode)
+    except Exception as e:
+        print(f"[error] {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

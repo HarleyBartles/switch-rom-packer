@@ -11,6 +11,7 @@ build/
 .venv/
 env/
 venv/
+.cache/
 
 # ========================
 # Switch builds (libnx, hacBrewPack)
@@ -22,6 +23,7 @@ venv/
 *.nacp
 *.o
 *.d
+filelist.txt
 
 # Stub working files
 stub/romfs/
