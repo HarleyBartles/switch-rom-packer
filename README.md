@@ -1,4 +1,4 @@
-# Switch ROM → NSP Packer
+# Retro ROM → Switch NSP Packer
 
 A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into installable Nintendo Switch titles.
 
@@ -17,6 +17,7 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 
 - **devkitPro + libnx** installed and on `PATH`.
 - **Python 3.10+** for the packer.
+- **Pillow** (installed via requirements.txt) for generating fallback icons.
 - A working **Makefile** in `stub/` (provided) that accepts:
   - `APP_TITLE`, `APP_AUTHOR`, `APP_VERSION`, `ICON`
   - `ROMFS` folder contents (autopopulated by the packer)
@@ -42,7 +43,8 @@ python3 packer.py ~/rom_input/
 
 1. **packer.py** discovers ROMs under `rom_root`, infers platform (simple rules for now), then:
    - Generates a per-ROM stub **RomFS** with a `filelist.txt`.
-   - Calls the stub **Makefile** to produce a per-ROM **NRO** with dynamic title and optional icon.
+   - Calls the stub **Makefile** to produce a per-ROM **NRO** with dynamic title and icon.  
+     If no icon is provided, a fallback initials-based JPEG is generated automatically.
    - Writes outputs to the chosen `--output-dir`.
 
 2. **stub/** (libnx) boots, reads `filelist.txt`, and performs a one-time copy to the SD card.
@@ -67,6 +69,7 @@ source .venv/bin/activate
 
 # install dependencies into the venv
 pip install -r requirements.txt
+```
 
 ---
 
@@ -110,6 +113,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
   - Defaults `--build-nro` to **on**.
   - Provides sensible defaults for `--stub-dir`, `--output-dir`, `--filelist-out`.
   - Integrates with the Makefile (RomFS auto-population, dynamic titles, optional icon).
+  - Generates fallback initials icons when none are provided.
 
 ### 🚧 In progress / next up
 
@@ -120,6 +124,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
 2. **Icon pipeline**
    - Auto-fetch a square icon per game from a **FOSS game DB** (no restrictive rate limits; API key OK).
    - Embed icon into the **NRO** now; reuse it later for **NSPs**.
+   - If no icon is found, the packer falls back to a generated initials-based JPEG.
    - Caching and a simple override mechanism (drop `*.png` alongside the ROM to force a specific icon).
 
 3. **Platform detection & metadata**
@@ -152,7 +157,8 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
 
 - No NSP output yet — forwarder flow is planned but not implemented.
 - Platform detection is heuristic and may need manual overrides for edge cases.
-- Icon auto-fetch is not implemented; icons can be supplied manually per build for now.
+- Icon auto-fetch is not fully implemented; fallback initials icons are generated,
+  or icons can be supplied manually per build.
 
 ---
 
