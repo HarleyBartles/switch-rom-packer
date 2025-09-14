@@ -44,15 +44,13 @@ def build_nsp_forwarder(
     """
     Create a minimal forwarder NSP using hacBrewPack.
 
-    Layout staged per ROM (in a temp working dir):
-      work/
-        control/control.nacp              (generated)
-        logo/icon_AmericanEnglish.dat     (copied from icon_path)
-        exefs/main + exefs/main.npdm      (template exefs you provide once)
-        romfs/nextNroPath                 (forwarder target)
-        romfs/nextArgv                    (forwarder argv)
-
-    Returns the path to the resulting .nsp in out_dir.
+    work/
+      control/control.nacp            (binary, generated via nacptool)
+      logo/icon_AmericanEnglish.dat   (copied from icon_path)
+      exefs/main + exefs/main.npdm    (template you provide once)
+      romfs/nextNroPath               (forwarder target)
+      romfs/nextArgv                  (forwarder argv)
+      config.json                     (metadata for reference)
     """
     opts = NSPOptions(
         stub_dir=stub_dir,
@@ -69,10 +67,10 @@ def build_nsp_forwarder(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1) Compute deterministic TitleID
+    # 1) Deterministic TitleID
     title_id = _compute_title_id(opts.platform, opts.rom_path, opts.titleid_base)
 
-    # 2) Stage working directory
+    # 2) Stage working dir
     work = out_dir / f".work_{title_id}"
     if work.exists():
         shutil.rmtree(work)
@@ -81,10 +79,10 @@ def build_nsp_forwarder(
     (work / "exefs").mkdir(parents=True, exist_ok=True)
     (work / "romfs").mkdir(parents=True, exist_ok=True)
 
-    # 3) Place exefs (requires a template you provide once)
+    # 3) exefs template (forwarder)
     _ensure_exefs(opts.stub_dir, work / "exefs")
 
-    # 4) Write hacBrewPack config
+    # 4) Write config.json (informational)
     _write_hbp_config_json(
         work=work,
         title=opts.hb_title,
@@ -93,17 +91,23 @@ def build_nsp_forwarder(
         title_id=title_id,
     )
 
-    # 5) Minimal control marker (JSON placeholder for visibility)
-    _write_control_nacp_json(work / "control" / "control.nacp", opts.hb_title, "Switch ROM Packer", "1.0.0", title_id)
+    # 5) Real control.nacp via nacptool
+    _write_control_nacp_bin(
+        nacp_path=work / "control" / "control.nacp",
+        title=opts.hb_title,
+        author="Switch ROM Packer",
+        version="1.0.0",
+        title_id=title_id,
+    )
 
-    # 6) Icon → logo/icon_AmericanEnglish.dat
+    # 6) Icon
     _copy_icon(opts.icon_path, work / "logo" / "icon_AmericanEnglish.dat")
 
     # 7) Forwarder romfs
     next_nro, next_argv = _resolve_forwarder_targets(opts)
     _write_forwarder_romfs(work / "romfs", next_nro, next_argv)
 
-    # 8) Invoke hacBrewPack
+    # 8) hacBrewPack
     hbp = _resolve_hacbrewpack_exe()
     if not hbp:
         raise SystemExit(
@@ -117,28 +121,35 @@ def build_nsp_forwarder(
     out_name = _suggest_nsp_name(opts.hb_title, title_id)
     out_path = opts.out_dir / out_name
 
-    cmd = [str(hbp), "-k", str(opts.keys_path), "-o", str(out_path), str(work)]
+    # Track new NSP
+    before = {p.resolve() for p in opts.out_dir.glob("*.nsp")}
+
+    cmd = [
+        str(hbp),
+        "-k", str(opts.keys_path),
+        "--exefsdir", str(work / "exefs"),
+        "--romfsdir", str(work / "romfs"),
+        "--controldir", str(work / "control"),
+        "--logodir", str(work / "logo"),
+        "--nspdir", str(opts.out_dir),  # dir, not file
+    ]
     print(f"[packer] Running: {' '.join(_shell_quote(a) for a in cmd)}")
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
-        # Preserve workdir for debugging on failure
         raise SystemExit(f"[packer] hacBrewPack failed with exit code {e.returncode}")
 
-    # Try common output shapes:
-    if out_path.exists() and out_path.is_file():
-        pass
-    else:
-        candidate = _find_first_nsp(work) or _find_first_nsp(opts.out_dir)
-        if candidate:
-            if out_path.exists():
-                out_path.unlink()
-            shutil.move(str(candidate), str(out_path))
-        else:
-            raise SystemExit("[packer] hacBrewPack finished but no NSP was found. Check logs and work dir.")
+    # Identify produced NSP & rename
+    produced = _pick_new_nsp(opts.out_dir, before) or _find_first_nsp(work) or _find_first_nsp(opts.out_dir)
+    if not produced:
+        raise SystemExit("[packer] hacBrewPack finished but no NSP was found. Check logs and work dir.")
 
-    # Cleanup work dir
+    if out_path.exists():
+        out_path.unlink()
+    shutil.move(str(produced), str(out_path))
+
     shutil.rmtree(work, ignore_errors=True)
+    print(f"[packer] Wrote NSP -> {out_path}")
     return out_path
 
 # -------------------------
@@ -146,72 +157,78 @@ def build_nsp_forwarder(
 # -------------------------
 
 def _compute_title_id(platform: str, rom_path: Path, titleid_base: Optional[str]) -> str:
-    """
-    Create a stable 16-hex TitleID.
-    If titleid_base is provided:
-       - If it's >= 16 hex chars, we prefix with first N chars and hash-fill the rest.
-       - If it's shorter, we left-pad with zeros.
-    Else:
-       - Use a private range nibble '05' + 14 hex from SHA1.
-    """
     h = hashlib.sha1(f"{platform}|{rom_path.name}".encode("utf-8")).hexdigest()
-
     if titleid_base:
         base = "".join(c for c in titleid_base.lower() if c in "0123456789abcdef")
-        if len(base) >= 16:
-            base = base[:16]
-        else:
-            base = base.zfill(16)
+        base = base[:16] if len(base) >= 16 else base.zfill(16)
         tid = base
     else:
         tid = "05" + h[:14]
-
     if len(tid) != 16:
         tid = (tid + h)[:16]
     return tid
 
 def _ensure_exefs(stub_dir: Path, exefs_dst: Path) -> None:
-    """
-    Copy a template exefs into exefs_dst.
-    You must provide template files once at:
-        <repo>/stub/vendor/exefs/main
-        <repo>/stub/vendor/exefs/main.npdm
-    This function will error if they don't exist.
-    """
     vendor = stub_dir / "vendor" / "exefs"
     main = vendor / "main"
     npdm = vendor / "main.npdm"
-
     if not main.exists() or not npdm.exists():
         raise SystemExit(
             "[packer] exefs template missing.\n"
             f"Expected: {main} and {npdm}\n"
             "Provide loader binaries once (hbloader-style) so forwarders can be packaged."
         )
-
     shutil.copy2(main, exefs_dst / "main")
     shutil.copy2(npdm, exefs_dst / "main.npdm")
 
 def _write_hbp_config_json(work: Path, title: str, author: str, version: str, title_id: str) -> None:
-    cfg = {
-        "title": title,
-        "publisher": author,
-        "version": version,
-        "titleId": title_id,
-    }
+    cfg = {"title": title, "publisher": author, "version": version, "titleId": title_id}
     with (work / "config.json").open("w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
-def _write_control_nacp_json(nacp_path: Path, title: str, author: str, version: str, title_id: str) -> None:
-    nacp = {
-        "title": title,
-        "author": author,
-        "version": version,
-        "titleId": title_id,
-        "_note": "Placeholder JSON for visibility; hacBrewPack will generate real control.nacp.",
-    }
-    with nacp_path.open("w", encoding="utf-8") as f:
-        json.dump(nacp, f, ensure_ascii=False, indent=2)
+def _resolve_nacptool() -> Optional[Path]:
+    """
+    Try DEVKITPRO first, then PATH.
+    devkitPro installs nacptool at: $DEVKITPRO/tools/bin/nacptool
+    """
+    exe = "nacptool.exe" if os.name == "nt" else "nacptool"
+    devkitpro = os.environ.get("DEVKITPRO")
+    if devkitpro:
+        candidate = Path(devkitpro) / "tools" / "bin" / exe
+        if candidate.exists():
+            return candidate.resolve()
+    found = shutil.which(exe)
+    return Path(found) if found else None
+
+def _write_control_nacp_bin(nacp_path: Path, title: str, author: str, version: str, title_id: str) -> None:
+    """
+    Generate a real binary control.nacp using nacptool.
+    """
+    nacptool = _resolve_nacptool()
+    if not nacptool:
+        raise SystemExit(
+            "[packer] `nacptool` not found. Install devkitPro (switch-tools) or add nacptool to PATH.\n"
+            "On Debian/Ubuntu via devkitPro pacman: https://devkitpro.org/wiki/devkitPro_pacman"
+        )
+
+    nacp_dir = nacp_path.parent
+    nacp_dir.mkdir(parents=True, exist_ok=True)
+
+    # nacptool --create <title> <author> <version> <out> --titleid=<hex16> --lang=<idx>:<localizedTitle>
+    cmd = [
+        str(nacptool),
+        "--create", title, author, version, str(nacp_path),
+        f"--titleid={title_id}",
+        "--lang=0:" + title,  # AmericanEnglish
+    ]
+    print(f"[packer] Generating control.nacp: {' '.join(_shell_quote(a) for a in cmd)}")
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        raise SystemExit(f"[packer] nacptool failed (exit {e.returncode}). Is devkitPro switch-tools installed?")
+
+    if not nacp_path.exists() or nacp_path.stat().st_size == 0:
+        raise SystemExit("[packer] control.nacp generation failed or produced empty file.")
 
 def _copy_icon(src_icon: Path, dest_icon: Path) -> None:
     if not src_icon.exists():
@@ -219,22 +236,8 @@ def _copy_icon(src_icon: Path, dest_icon: Path) -> None:
     shutil.copy2(src_icon, dest_icon)
 
 def _resolve_forwarder_targets(opts: NSPOptions) -> Tuple[str, str]:
-    """
-    Return (nextNroPath, nextArgv) strings for romfs/.
-
-    Modes:
-      - retroarch: Launch RetroArch frontend and pass: -L <core .so> "<sdmc:/roms/.../file>"
-      - nro:       Launch a specific NRO (default RetroArch frontend), argv is just the ROM path.
-
-    SD layout assumptions:
-      - RetroArch frontend: sdmc:/switch/retroarch/retroarch_switch.nro
-      - Cores (.so):        sdmc:/switch/retroarch/cores/<core>.so
-      - ROM:                sdmc:/roms/<platform>/<romfile>
-    """
     rom_sd = f"sdmc:/roms/{opts.platform}/{opts.rom_path.name}"
-
     if opts.forwarder_mode == "retroarch":
-        # Resolve platform → core .so via cores.py (custom or default map)
         core_map = load_core_map(opts.core_map_path)
         core_path = resolve_core_so(opts.platform, core_map)
         if not core_path:
@@ -244,19 +247,11 @@ def _resolve_forwarder_targets(opts: NSPOptions) -> Tuple[str, str]:
                 f"{opts.platform!r} (canonical: {canon!r}). "
                 "Add it to packer/data/cores.yml or pass --core-map."
             )
-
         retroarch_nro = "sdmc:/switch/retroarch/retroarch_switch.nro"
-        nextNroPath = retroarch_nro
-        # argv: -L <core> "<rom>"
-        nextArgv = f'-L "{core_path}" "{rom_sd}"'
-        return nextNroPath, nextArgv
-
+        return retroarch_nro, f'-L "{core_path}" "{rom_sd}"'
     elif opts.forwarder_mode == "nro":
-        # Generic jump to hbmenu-compatible NRO (default to RetroArch frontend)
-        nextNroPath = "sdmc:/switch/retroarch/retroarch_switch.nro"
-        nextArgv = f'"{rom_sd}"'
-        return nextNroPath, nextArgv
-
+        # Generic jump to hbmenu-compatible NRO (default RetroArch frontend)
+        return "sdmc:/switch/retroarch/retroarch_switch.nro", f'"{rom_sd}"'
     else:
         raise SystemExit(f"[packer] Unknown forwarder mode: {opts.forwarder_mode}")
 
@@ -266,18 +261,11 @@ def _write_forwarder_romfs(romfs_dir: Path, next_nro_path: str, next_argv: str) 
     (romfs_dir / "nextArgv").write_text(next_argv, encoding="utf-8")
 
 def _resolve_hacbrewpack_exe() -> Optional[Path]:
-    """
-    Prefer vendored submodule executable; if missing, build it:
-      - copy config.mk.template -> config.mk if needed
-      - run `make`
-    Fallback to PATH if vendored build fails.
-    """
     repo_dir = Path(__file__).resolve().parents[2]
     hbproot = repo_dir / "tools" / "hacbrewpack"
     exe_name = "hacbrewpack.exe" if os.name == "nt" else "hacbrewpack"
     repo_hbp = hbproot / exe_name
 
-    # If vendored binary already exists
     if repo_hbp.exists():
         return repo_hbp.resolve()
 
@@ -287,13 +275,9 @@ def _resolve_hacbrewpack_exe() -> Optional[Path]:
 
     if makefile.exists():
         try:
-            # Ensure config.mk exists
-            if not cfg.exists():
-                if cfg_template.exists():
-                    print("[packer] Creating tools/hacbrewpack/config.mk from template...")
-                    shutil.copy2(cfg_template, cfg)
-                else:
-                    print(f"[packer] Missing {cfg} and no template at {cfg_template}", file=sys.stderr)
+            if not cfg.exists() and cfg_template.exists():
+                print("[packer] Creating tools/hacbrewpack/config.mk from template...")
+                shutil.copy2(cfg_template, cfg)
 
             print("[packer] hacBrewPack binary not found; attempting to build via `make`...")
             subprocess.run(["make"], cwd=str(hbproot), check=True)
@@ -307,7 +291,6 @@ def _resolve_hacbrewpack_exe() -> Optional[Path]:
         except subprocess.CalledProcessError as e:
             print(f"[packer] `make` failed (exit {e.returncode}); will try PATH.", file=sys.stderr)
 
-    # Fallback to PATH
     exe = shutil.which(exe_name)
     return Path(exe) if exe else None
 
@@ -320,6 +303,15 @@ def _suggest_nsp_name(title: str, title_id: str) -> str:
 def _find_first_nsp(root: Path) -> Optional[Path]:
     for p in root.rglob("*.nsp"):
         return p
+    return None
+
+def _pick_new_nsp(out_dir: Path, before_set: set[Path]) -> Optional[Path]:
+    after_set = {p.resolve() for p in out_dir.glob("*.nsp")}
+    new_files = list(after_set - before_set)
+    if new_files:
+        return max(new_files, key=lambda p: p.stat().st_mtime)
+    if after_set:
+        return max(after_set, key=lambda p: p.stat().st_mtime)
     return None
 
 def _shell_quote(s: str) -> str:
