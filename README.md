@@ -4,10 +4,13 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 
 - Each generated **NRO** wraps a single ROM using a tiny libnx stub.
 - On first launch the stub copies the ROM to `/roms/<platform>/` on SD.
+- Icons are auto-fetched from the [Libretro Thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails) repo  
+  (with configurable preference: **logos** by default, or **boxarts**).
+- If no match is found, the packer falls back to a generated initials-based JPEG.
 - (Planned) Build **NSP** forwarders to launch RetroArch with the ROM.
 - Designed to batch through large libraries with minimal config.
 
-> **Project status:** Early WIP (Sep 13, 2025). Working libnx stub + Python packer pipeline for per-ROM NROs is in place; NSP build/forwarder flow and icon auto-fetch are next.
+> **Project status:** Early WIP (Sep 2025). Working libnx stub + Python packer pipeline + icon auto-fetch are in place; NSP build/forwarder flow is next.
 
 ---
 
@@ -17,7 +20,7 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 
 - **devkitPro + libnx** installed and on `PATH`.
 - **Python 3.10+** for the packer.
-- **Pillow** (installed via requirements.txt) for generating fallback icons.
+- **Pillow** (installed via requirements.txt) for icon conversion/fallback generation.
 - A working **Makefile** in `stub/` (provided) that accepts:
   - `APP_TITLE`, `APP_AUTHOR`, `APP_VERSION`, `ICON`
   - `ROMFS` folder contents (autopopulated by the packer)
@@ -36,6 +39,9 @@ python3 packer.py ~/rom_input/
 - `--stub-dir`, `--output-dir`, and `--filelist-out` all have sensible defaults.
 - The packer writes a `filelist.txt` into the stub’s RomFS (platform + filename)
   which the stub reads to copy the ROM to `/roms/<platform>/<romfile>` at first launch.
+- The icon pipeline:
+  - Looks up `Named_Logos`, `Named_Boxarts`, `Named_Titles`, then `Named_Snaps` in that order (logos first).
+  - Can be overridden with `--icon-preference boxarts-first`.
 
 ---
 
@@ -43,8 +49,8 @@ python3 packer.py ~/rom_input/
 
 1. **packer.py** discovers ROMs under `rom_root`, infers platform (simple rules for now), then:
    - Generates a per-ROM stub **RomFS** with a `filelist.txt`.
-   - Calls the stub **Makefile** to produce a per-ROM **NRO** with dynamic title and icon.  
-     If no icon is provided, a fallback initials-based JPEG is generated automatically.
+   - Calls the stub **Makefile** to produce a per-ROM **NRO** with dynamic title and icon.
+   - Icons are auto-fetched from Libretro thumbnails, cached under `~/.switch-rom-packer/cache/icons/`.
    - Writes outputs to the chosen `--output-dir`.
 
 2. **stub/** (libnx) boots, reads `filelist.txt`, and performs a one-time copy to the SD card.
@@ -79,19 +85,19 @@ pip install -r requirements.txt
 usage: packer.py [-h] [--build-nro/--no-build-nro]
                  [--stub-dir STUB_DIR] [--output-dir OUTPUT_DIR]
                  [--filelist-out FILELIST_OUT]
+                 [--icon-preference {logos, boxarts}]
+                 [--debug-icons]
                  rom_root
 ```
 
 - `rom_root` (positional): directory containing your ROMs.
-- `--build-nro` (default **enabled**): produce NROs via the stub Makefile. Use `--no-build-nro` to disable.
+- `--build-nro` (default **enabled**): produce NROs via the stub Makefile.
 - `--no-build-nro`: use to disable NRO output.
 - `--stub-dir`: path to the libnx stub (default: `./stub`).
 - `--output-dir`: directory for generated NROs (sensible default).
 - `--filelist-out`: where to write the stub’s `filelist.txt` (default aligns with stub layout).
+- `--icon-preference` (options [`logos`, `boxarts`], default `logos`): choose thumbnail set priority.
 - `--debug-icons`: enable additional logging during icon lookup.
-- `--icon-preference` (default **logos**): choose icon preference. options [**boxarts**, **logos**]
-
-> Current platforms and icon rules are intentionally minimal; see the roadmap for what’s next.
 
 ---
 
@@ -99,6 +105,7 @@ usage: packer.py [-h] [--build-nro/--no-build-nro]
 
 - The Makefile is wired so the packer can set `APP_TITLE/APP_AUTHOR/APP_VERSION/ICON`
   and populate **RomFS** for each ROM build automatically.
+- Icon cache is stored under `~/.switch-rom-packer/cache/icons/`.
 - Tests and simple fixtures live under `test/`.
 
 Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -114,8 +121,8 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
   - Takes `rom_root` as positional arg.
   - Defaults `--build-nro` to **on**.
   - Provides sensible defaults for `--stub-dir`, `--output-dir`, `--filelist-out`.
-  - Integrates with the Makefile (RomFS auto-population, dynamic titles, optional icon).
-  - Generates fallback initials icons when none are provided.
+  - Integrates with the Makefile (RomFS auto-population, dynamic titles, icons).
+  - Fetches and caches Libretro thumbnails (logos/boxarts) with fallback initials icons.
 
 ### 🚧 In progress / next up
 
@@ -123,21 +130,15 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
    - Wire up **hacBrewPack** from the packer to emit per-ROM NSPs.
    - Create a **RetroArch forwarder NSP** flow: install a small forwarder that launches RetroArch and immediately boots the copied ROM with the correct core.
 
-2. **Icon pipeline**
-   - Auto-fetch a square icon per game from a **FOSS game DB** (no restrictive rate limits; API key OK).
-   - Embed icon into the **NRO** now; reuse it later for **NSPs**.
-   - If no icon is found, the packer falls back to a generated initials-based JPEG.
-   - Caching and a simple override mechanism (drop `*.png` alongside the ROM to force a specific icon).
-
-3. **Platform detection & metadata**
+2. **Platform detection & metadata**
    - Expand platform inference rules (by folder name and filename suffixes).
    - Optional manifest file to pin platform/core when heuristics are ambiguous.
 
-4. **RetroArch core mapping**
+3. **RetroArch core mapping**
    - Maintain a simple map: `<platform> -> <core name>`.
    - Allow per-title overrides.
 
-5. **Quality & DX**
+4. **Quality & DX**
    - Dry-run mode, better logging, progress bars for big batches.
    - Structured outputs + summary table at the end (counts, failures).
    - CI checks (format, lint, stub compiles).
@@ -159,8 +160,6 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
 
 - No NSP output yet — forwarder flow is planned but not implemented.
 - Platform detection is heuristic and may need manual overrides for edge cases.
-- Icon auto-fetch is not fully implemented; fallback initials icons are generated,
-  or icons can be supplied manually per build.
 
 ---
 
