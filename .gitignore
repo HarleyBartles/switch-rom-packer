@@ -57,3 +57,11 @@ out/
 .idea/
 *.swp
 *~
+
+# ========================
+# Vendors
+# ========================
+
+# ExeFS blobs (user must supply)
+stub/vendor/exefs/*
+!stub/vendor/exefs/README.md

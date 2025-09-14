@@ -56,7 +56,7 @@ def _tidy_spaces_commas(s: str) -> str:
 
 def parse_rom_title(rom_path: str) -> Tuple[str, List[str]]:
     """
-    Derive a canonical hbmenu title and a list of alt_titles from a ROM filename.
+    Derive a canonical nro title and a list of alt_titles from a ROM filename.
 
     Example:
         '7th Saga, The (U) [!].smc'

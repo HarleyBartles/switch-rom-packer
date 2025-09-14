@@ -25,7 +25,21 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 - A working **Makefile** in `stub/` (provided) that accepts:
   - `APP_TITLE`, `APP_AUTHOR`, `APP_VERSION`, `ICON`
   - `ROMFS` folder contents (autopopulated by the packer)
-  - **hacBrewPack** for NSP builds (already included as a submodule).
+- **hacBrewPack** for NSP builds (already included as a submodule).
+
+### Additional system dependencies (for hacBrewPack)
+
+To build `tools/hacbrewpack/`, you need a C toolchain and supporting build tools.  
+On Ubuntu / Debian (including WSL):
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake pkg-config zlib1g-dev
+```
+
+These provide `gcc`, `make`, and headers needed to compile mbedtls (used by hacBrewPack).
+
+---
 
 ### Cloning with submodules
 

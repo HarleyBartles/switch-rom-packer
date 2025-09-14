@@ -1,0 +1,121 @@
+# cores.yml — default RetroArch core mapping for Nintendo Switch (libnx builds)
+# Notes:
+# - We compose each entry under "platforms" with default_core_dir.
+# - Provide multiple cores per platform in priority order; we'll pick the first one present.
+
+default_core_dir: "sdmc:/switch/retroarch/cores"
+
+platforms:
+  "Nintendo - Super Nintendo Entertainment System":
+    - snes9x2010_libretro_libnx.so
+    - snes9x_libretro_libnx.so
+    - snes9x2005_plus_libretro_libnx.so
+
+  "Nintendo - Nintendo Entertainment System":
+    - mesen_libretro_libnx.so
+    - fceumm_libretro_libnx.so
+    - nestopia_libretro_libnx.so
+
+  "Nintendo - Game Boy":
+    - gambatte_libretro_libnx.so
+    - sameboy_libretro_libnx.so
+
+  "Nintendo - Game Boy Color":
+    - gambatte_libretro_libnx.so
+    - sameboy_libretro_libnx.so
+
+  "Nintendo - Game Boy Advance":
+    - mgba_libretro_libnx.so
+    - vba_next_libretro_libnx.so
+    - vbam_libretro_libnx.so
+
+  "Nintendo - Nintendo 64":
+    - mupen64plus_next_libretro_libnx.so
+    - parallel_n64_libretro_libnx.so
+
+  "Nintendo - Nintendo DS":
+    - melonds_libretro_libnx.so
+
+  "Nintendo - 3DS":
+    - citra_libretro_libnx.so
+
+  "Nintendo - Virtual Boy":
+    - beetle_vb_libretro_libnx.so
+
+  "Sega - Mega Drive - Genesis":
+    - genesis_plus_gx_libretro_libnx.so
+    - picodrive_libretro_libnx.so
+
+  "Sega - Master System - Mark III":
+    - genesis_plus_gx_libretro_libnx.so
+    - picodrive_libretro_libnx.so
+
+  "Sega - Game Gear":
+    - genesis_plus_gx_libretro_libnx.so
+    - picodrive_libretro_libnx.so
+
+  "Sega - 32X":
+    - picodrive_libretro_libnx.so
+
+  "Sega - Saturn":
+    - yabasanshiro_libretro_libnx.so
+    - kronos_libretro_libnx.so
+
+  "Sega - Dreamcast":
+    - flycast_libretro_libnx.so
+
+  "Sony - PlayStation":
+    - pcsx_rearmed_libretro_libnx.so
+    - duckstation_libretro_libnx.so
+
+  "Sony - PSP":
+    - ppsspp_libretro_libnx.so
+
+  "NEC - PC Engine - TurboGrafx 16":
+    - beetle_pce_fast_libretro_libnx.so
+
+  "NEC - PC Engine CD - TurboGrafx-CD":
+    - beetle_pce_fast_libretro_libnx.so
+
+  "SNK - Neo Geo Pocket Color":
+    - beetle_ngp_libretro_libnx.so
+    - race_libretro_libnx.so
+
+  "Bandai - WonderSwan Color":
+    - beetle_wswan_libretro_libnx.so
+
+  "Atari - 2600":
+    - stella_libretro_libnx.so
+
+  "Atari - 7800":
+    - prosystem_libretro_libnx.so
+
+  "Atari - Lynx":
+    - handy_libretro_libnx.so
+    - beetle_lynx_libretro_libnx.so
+
+  "MSX":
+    - bluemsx_libretro_libnx.so
+    - fmsx_libretro_libnx.so
+
+  "3DO":
+    - opera_libretro_libnx.so
+    - 4do_libretro_libnx.so
+
+  "Commodore - C64":
+    - vice_x64_libretro_libnx.so
+
+  "DOS":
+    - dosbox_pure_libretro_libnx.so
+
+  "ScummVM":
+    - scummvm_libretro_libnx.so
+
+  "Arcade - FBNeo":
+    - fbneo_libretro_libnx.so
+
+  "Arcade - MAME 2003-Plus":
+    - mame2003_plus_libretro_libnx.so
+
+  "Arcade - MAME 2010":
+    - mame2010_libretro_libnx.so
