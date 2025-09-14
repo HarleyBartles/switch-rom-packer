@@ -7,11 +7,12 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 - Icons are auto-fetched from the [Libretro Thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails) repo  
   (with configurable preference: **logos** by default, or **boxarts**).
 - If no match is found, the packer falls back to a generated initials-based JPEG.
-- **NSP build support is in progress** — the project now vendors [hacBrewPack](https://github.com/pplatoon/hacBrewPack) as a submodule.
+- **NSP forwarder build support is now wired up** — the project vendors [hacBrewPack](https://github.com/pplatoon/hacBrewPack) as a submodule, and the pipeline can produce per-ROM NSP forwarders.
+- **Current limitation:** produced NSPs install but show as a grey box with a spinner on hardware. This will be addressed in the next milestone.
 - Designed to batch through large libraries with minimal config.
 
-> **Project status:** Early WIP (Sep 2025). Working libnx stub + Python packer pipeline + icon auto-fetch are in place.  
-> `tools/hacbrewpack/` is vendored as a git submodule; NSP build/forwarder flow is the next milestone.
+> **Project status:** Early WIP (Sep 2025). Working libnx stub + Python packer pipeline + icon auto-fetch + NSP forwarder build flow (using hacBrewPack).  
+> NSPs are being built end-to-end, but forwarder boot logic isn’t yet functional.
 
 ---
 
@@ -87,9 +88,12 @@ python3 packer.py ~/rom_input/
 
 2. **stub/** (libnx) boots, reads `filelist.txt`, and performs a one-time copy to the SD card.
 
-3. **NSP build integration (in progress)**  
+3. **forwarder/** (libnx) builds exefs/main + main.npdm via its Makefile, which is installed into `stub/vendor/exefs/` for use in NSP forwarders.
+
+4. **NSP build integration (working, but limited)**  
    - `tools/hacbrewpack/` is included as a submodule.  
-   - Upcoming work: use it to produce **NSP forwarders** so installed titles show up on the HOME menu and launch directly into the game.
+   - Pipeline now stages RomFS/ExeFS/Control/Logo and invokes hacBrewPack.  
+   - NSPs are successfully produced, but forwarders currently show as a grey spinner when launched on real hardware.
 
 ---
 
@@ -116,20 +120,27 @@ pip install -r requirements.txt
 ## Usage (packer.py)
 
 ```
-usage: packer.py [-h] [--build-nro/--no-build-nro]
+usage: packer.py [-h] [--build-nro/--no-build-nro] [--build-nsp/--no-build-nsp]
                  [--stub-dir STUB_DIR] [--output-dir OUTPUT_DIR]
                  [--filelist-out FILELIST_OUT]
-                 [--icon-preference {logos, boxarts}]
-                 [--debug-icons]
+                 [--keys KEYS] [--forwarder {retroarch,nro}]
+                 [--core-map CORE_MAP] [--titleid-base TITLEID_BASE]
+                 [--icon-preference {logos, boxarts}] [--debug-icons]
                  rom_root
 ```
 
 - `rom_root` (positional): directory containing your ROMs.
 - `--build-nro` (default **enabled**): produce NROs via the stub Makefile.
-- `--no-build-nro`: use to disable NRO output.
+- `--no-build-nro`: disable NRO output.
+- `--build-nsp` (default **enabled**): produce NSP forwarders via hacBrewPack.
+- `--no-build-nsp`: disable NSP output.
 - `--stub-dir`: path to the libnx stub (default: `./stub`).
-- `--output-dir`: directory for generated NROs (sensible default).
-- `--filelist-out`: where to write the stub’s `filelist.txt` (default aligns with stub layout).
+- `--output-dir`: directory for generated outputs (default: `./out`).
+- `--filelist-out`: where to write the stub’s `filelist.txt`.
+- `--keys`: path to `prod.keys` for hacBrewPack (default: `~/.switch/prod.keys`).
+- `--forwarder`: forwarder mode (`retroarch` launches RetroArch core, `nro` jumps to arbitrary NRO).
+- `--core-map`: YAML file mapping `<platform> -> <core nro path>`.
+- `--titleid-base`: optional deterministic TitleID salt (16 hex).  
 - `--icon-preference` (options [`logos`, `boxarts`], default `logos`): choose thumbnail set priority.
 - `--debug-icons`: enable additional logging during icon lookup.
 
@@ -140,10 +151,9 @@ usage: packer.py [-h] [--build-nro/--no-build-nro]
 - The Makefile is wired so the packer can set `APP_TITLE/APP_AUTHOR/APP_VERSION/ICON`
   and populate **RomFS** for each ROM build automatically.
 - Icon cache is stored under `~/.switch-rom-packer/cache/icons/`.
-- `tools/hacbrewpack/` is vendored as a submodule (pinned release).
-- Tests and simple fixtures live under `test/`.
-
-Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
+- `tools/hacbrewpack/` is vendored as a submodule (pinned release). Submodule changes are ignored at the parent repo level.
+- Forwarder exefs build is now automated via `make install` in `forwarder/`.
+- NSP build pipeline is wired up and tested, but forwarder behavior needs debugging.
 
 ---
 
@@ -158,13 +168,14 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
   - Provides sensible defaults for `--stub-dir`, `--output-dir`, `--filelist-out`.
   - Integrates with the Makefile (RomFS auto-population, dynamic titles, icons).
   - Fetches and caches Libretro thumbnails (logos/boxarts) with fallback initials icons.
-  - **hacBrewPack vendored** as `tools/hacbrewpack/` submodule, ready for NSP build step.
+  - **hacBrewPack vendored** as `tools/hacbrewpack/` submodule, wired into NSP build flow.
+  - **forwarder/** project builds exefs/main + main.npdm and installs into stub/vendor/exefs.
 
 ### 🚧 In progress / next up
 
-1. **NSP build integration**
-   - Wire up **hacBrewPack** from the packer to emit per-ROM NSPs.
-   - Create a **RetroArch forwarder NSP** flow: install a small forwarder that launches RetroArch and immediately boots the copied ROM with the correct core.
+1. **NSP forwarder runtime debugging**
+   - Fix why NSPs install but only display a grey spinner on hardware.
+   - Ensure RetroArch forwarder logic launches correctly.
 
 2. **Platform detection & metadata**
    - Expand platform inference rules (by folder name and filename suffixes).
@@ -194,7 +205,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
 
 ## Known limitations
 
-- NSP forwarders aren’t implemented yet — submodule is vendored, but integration logic still pending.
+- NSP forwarders currently install but do not boot properly (grey spinner).  
 - Platform detection is heuristic and may need manual overrides for edge cases.
 
 ---
@@ -202,13 +213,13 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
 ## FAQ
 
 **Q: Can I just run `python3 packer.py ~/rom_input/` without extra flags?**  
-Yes. That’s the intended default path: it builds NROs using sensible defaults.
+Yes. That’s the intended default path: it builds NROs and NSPs using sensible defaults.
 
 **Q: Where do ROMs end up on the SD card?**  
 On first run the stub copies them to `/roms/<platform>/<romfile>`.
 
 **Q: Will these show up as installable titles on HOME?**  
-Not yet. That’s what the NSP + forwarder pipeline will enable.
+Yes — the NSP build pipeline produces installable forwarders, but they don’t yet boot correctly.
 
 ---
 
