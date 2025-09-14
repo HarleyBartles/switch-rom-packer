@@ -74,13 +74,13 @@ def find_icon_with_alts(
     For each title, step the threshold down until a match is found.
 
     preference:
-        - "logos"   -> ["Named_Logos", "Named_Titles", "Named_Boxarts", "Named_Snaps"]
-        - "boxarts" -> ["Named_Boxarts", "Named_Titles", "Named_Logos", "Named_Snaps"]
+        - "logos"   -> ["Named_Logos", "Named_Boxarts", "Named_Titles", "Named_Snaps"]
+        - "boxarts" -> ["Named_Boxarts", "Named_Logos", "Named_Titles", "Named_Snaps"]
     """
     if preference == "boxarts":
-        subdirs = ["Named_Boxarts", "Named_Titles", "Named_Logos", "Named_Snaps"]
+        subdirs = ["Named_Boxarts", "Named_Logos", "Named_Titles", "Named_Snaps"]
     else:
-        subdirs = ["Named_Logos", "Named_Titles", "Named_Boxarts", "Named_Snaps"]
+        subdirs = ["Named_Logos", "Named_Boxarts", "Named_Titles", "Named_Snaps"]
 
     candidates = [primary_title] + [
         t for t in alt_titles if t.lower() != primary_title.lower()
