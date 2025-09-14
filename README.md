@@ -7,10 +7,11 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 - Icons are auto-fetched from the [Libretro Thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails) repo  
   (with configurable preference: **logos** by default, or **boxarts**).
 - If no match is found, the packer falls back to a generated initials-based JPEG.
-- (Planned) Build **NSP** forwarders to launch RetroArch with the ROM.
+- **NSP build support is in progress** — the project now vendors [hacBrewPack](https://github.com/The-4n/hacBrewPack) as a submodule.
 - Designed to batch through large libraries with minimal config.
 
-> **Project status:** Early WIP (Sep 2025). Working libnx stub + Python packer pipeline + icon auto-fetch are in place; NSP build/forwarder flow is next.
+> **Project status:** Early WIP (Sep 2025). Working libnx stub + Python packer pipeline + icon auto-fetch are in place.  
+> `tools/hacbrewpack/` is vendored as a git submodule; NSP build/forwarder flow is the next milestone.
 
 ---
 
@@ -24,8 +25,25 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 - A working **Makefile** in `stub/` (provided) that accepts:
   - `APP_TITLE`, `APP_AUTHOR`, `APP_VERSION`, `ICON`
   - `ROMFS` folder contents (autopopulated by the packer)
+  - **hacBrewPack** for NSP builds (already included as a submodule).
 
-### Build a batch of NROs
+### Cloning with submodules
+
+When cloning this repo, make sure to pull submodules so `tools/hacbrewpack/` is available:
+
+```bash
+git clone --recurse-submodules https://github.com/HarleyBartles/switch-rom-packer
+```
+
+If you already cloned without submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
+---
+
+## Build a batch of NROs
 
 ```bash
 # Example:
@@ -41,7 +59,7 @@ python3 packer.py ~/rom_input/
   which the stub reads to copy the ROM to `/roms/<platform>/<romfile>` at first launch.
 - The icon pipeline:
   - Looks up `Named_Logos`, `Named_Boxarts`, `Named_Titles`, then `Named_Snaps` in that order (logos first).
-  - Can be overridden with `--icon-preference boxarts-first`.
+  - Can be overridden with `--icon-preference boxarts`.
 
 ---
 
@@ -55,7 +73,9 @@ python3 packer.py ~/rom_input/
 
 2. **stub/** (libnx) boots, reads `filelist.txt`, and performs a one-time copy to the SD card.
 
-3. **Planned**: Use **hacBrewPack** to produce **NSPs**, and emit RetroArch **forwarder NSPs** so installed titles show up on the HOME menu and launch directly into the game.
+3. **NSP build integration (in progress)**  
+   - `tools/hacbrewpack/` is included as a submodule.  
+   - Upcoming work: use it to produce **NSP forwarders** so installed titles show up on the HOME menu and launch directly into the game.
 
 ---
 
@@ -106,6 +126,7 @@ usage: packer.py [-h] [--build-nro/--no-build-nro]
 - The Makefile is wired so the packer can set `APP_TITLE/APP_AUTHOR/APP_VERSION/ICON`
   and populate **RomFS** for each ROM build automatically.
 - Icon cache is stored under `~/.switch-rom-packer/cache/icons/`.
+- `tools/hacbrewpack/` is vendored as a submodule (pinned release).
 - Tests and simple fixtures live under `test/`.
 
 Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -123,6 +144,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
   - Provides sensible defaults for `--stub-dir`, `--output-dir`, `--filelist-out`.
   - Integrates with the Makefile (RomFS auto-population, dynamic titles, icons).
   - Fetches and caches Libretro thumbnails (logos/boxarts) with fallback initials icons.
+  - **hacBrewPack vendored** as `tools/hacbrewpack/` submodule, ready for NSP build step.
 
 ### 🚧 In progress / next up
 
@@ -158,7 +180,7 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code o
 
 ## Known limitations
 
-- No NSP output yet — forwarder flow is planned but not implemented.
+- NSP forwarders aren’t implemented yet — submodule is vendored, but integration logic still pending.
 - Platform detection is heuristic and may need manual overrides for edge cases.
 
 ---
