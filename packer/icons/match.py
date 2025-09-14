@@ -35,7 +35,7 @@ def icon_provider_search(
     """
     Delegate to one or more providers to try and resolve an icon.
     Currently wires into libretro provider; can add others later.
-    subdirs: override search order (e.g. logos-first vs boxarts-first).
+    subdirs: override search order (e.g. logos vs boxarts).
     """
     # 1) Try libretro provider if available
     try:
@@ -67,17 +67,17 @@ def find_icon_with_alts(
     thresholds: Tuple[float, float, float] = (0.87, 0.83, 0.80),
     *,
     source_name_hint: Optional[str] = None,
-    preference: str = "logos-first",
+    preference: str = "logos",
 ) -> Optional[Path]:
     """
     Try the primary title, then each alt title.
     For each title, step the threshold down until a match is found.
 
     preference:
-        - "logos-first"   -> ["Named_Logos", "Named_Titles", "Named_Boxarts", "Named_Snaps"]
-        - "boxarts-first" -> ["Named_Boxarts", "Named_Titles", "Named_Logos", "Named_Snaps"]
+        - "logos"   -> ["Named_Logos", "Named_Titles", "Named_Boxarts", "Named_Snaps"]
+        - "boxarts" -> ["Named_Boxarts", "Named_Titles", "Named_Logos", "Named_Snaps"]
     """
-    if preference == "boxarts-first":
+    if preference == "boxarts":
         subdirs = ["Named_Boxarts", "Named_Titles", "Named_Logos", "Named_Snaps"]
     else:
         subdirs = ["Named_Logos", "Named_Titles", "Named_Boxarts", "Named_Snaps"]

@@ -45,14 +45,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--output-dir", type=Path, default=DEFAULT_OUT_DIR)
     ap.add_argument("--filelist-out", type=Path, default=DEFAULT_FILELIST)
     ap.add_argument("--build-nro", dest="build_nro", action=argparse.BooleanOptionalAction, default=True)
-    # Accept (and currently ignore) the legacy flag so existing scripts don’t break
+    ap.add_argument("--no-build-nro", dest="build_nro", action=argparse.BooleanOptionalAction, help="Skip NRO build step (useful for testing icon/title detection)")
     ap.add_argument("--debug-icons", action="store_true", help="Enable extra icon lookup logging (currently verbose by default)")
-    ap.add_argument(
-        "--icon-preference",
-        choices=["logos-first", "boxarts-first"],
-        default="logos-first",
-        help="Choose thumbnail set priority (default: logos-first)."
-    )
+    ap.add_argument("--icon-preference", choices=["logos", "boxarts"], default="logos", help="Choose thumbnail priority (default: logos).")
     args = ap.parse_args(argv)
 
     rom_root: Path = args.rom_root

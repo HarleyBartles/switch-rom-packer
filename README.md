@@ -88,6 +88,8 @@ usage: packer.py [-h] [--build-nro/--no-build-nro]
 - `--stub-dir`: path to the libnx stub (default: `./stub`).
 - `--output-dir`: directory for generated NROs (sensible default).
 - `--filelist-out`: where to write the stub’s `filelist.txt` (default aligns with stub layout).
+- `--debug-icons`: enable additional logging during icon lookup.
+- `--icon-preference` (default **logos**): choose icon preference. options [**boxarts**, **logos**]
 
 > Current platforms and icon rules are intentionally minimal; see the roadmap for what’s next.
 
