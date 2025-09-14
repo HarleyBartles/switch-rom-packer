@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 
 from .cores import load_core_map, resolve_core_so, canonical_platform
 
+
 @dataclass
 class NSPOptions:
     stub_dir: Path
@@ -26,8 +27,14 @@ class NSPOptions:
     core_map_path: Optional[Path]
     titleid_base: Optional[str]  # 16-hex prefix/salt (optional)
 
-# ---------- Main build flow ----------
 
+# ---------- Paths ----------
+REPO_ROOT   = Path(__file__).resolve().parents[2]
+FORWARDER_DIR = REPO_ROOT / "forwarder"
+VENDOR_EXEFS  = REPO_ROOT / "stub" / "vendor" / "exefs"
+
+
+# ---------- Main build flow ----------
 def build_nsp_forwarder(
     *,
     stub_dir: Path,
@@ -47,7 +54,7 @@ def build_nsp_forwarder(
     work/
       control/control.nacp            (binary, generated via nacptool)
       logo/icon_AmericanEnglish.dat   (copied from icon_path)
-      exefs/main + exefs/main.npdm    (template you provide once)
+      exefs/main + exefs/main.npdm    (from stub/vendor/exefs; kept fresh by `forwarder install`)
       romfs/nextNroPath               (forwarder target)
       romfs/nextArgv                  (forwarder argv)
       config.json                     (metadata for reference)
@@ -67,6 +74,9 @@ def build_nsp_forwarder(
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Ensure vendor exefs (build forwarder + install into stub/vendor/exefs)
+    _ensure_vendor_exefs()
+
     # 1) Deterministic TitleID
     title_id = _compute_title_id(opts.platform, opts.rom_path, opts.titleid_base)
 
@@ -79,8 +89,8 @@ def build_nsp_forwarder(
     (work / "exefs").mkdir(parents=True, exist_ok=True)
     (work / "romfs").mkdir(parents=True, exist_ok=True)
 
-    # 3) exefs template (forwarder)
-    _ensure_exefs(opts.stub_dir, work / "exefs")
+    # 3) ExeFS (forwarder) -> stage from vendor
+    _stage_vendor_exefs(exefs_dst=work / "exefs")
 
     # 4) Write config.json (informational)
     _write_hbp_config_json(
@@ -155,6 +165,47 @@ def build_nsp_forwarder(
 # -------------------------
 # Helpers
 # -------------------------
+def _ensure_vendor_exefs() -> None:
+    """Build forwarder and install its ExeFS into stub/vendor/exefs (idempotent)."""
+    env = os.environ.copy()
+    env.setdefault("DEVKITPRO", "/opt/devkitpro")
+    env.setdefault("DEVKITA64", str(Path(env["DEVKITPRO"]) / "devkitA64"))
+    tools_bin = str(Path(env["DEVKITPRO"]) / "tools" / "bin")
+    if tools_bin not in env.get("PATH", ""):
+        env["PATH"] = tools_bin + os.pathsep + env.get("PATH", "")
+
+    # Ensure toolchain essentials are available (helpful error if not)
+    switch_specs = Path(env["DEVKITPRO"]) / "libnx" / "switch.specs"
+    if not switch_specs.exists():
+        raise SystemExit(
+            f"[packer] Missing {switch_specs}. Install/repair devkitPro libnx:\n"
+            "  sudo dkp-pacman -Syu && sudo dkp-pacman -S libnx switch-dev switch-tools"
+        )
+    for tool in ("aarch64-none-elf-gcc", "elf2nso", "npdmtool", "nacptool"):
+        if not shutil.which(tool, path=env.get("PATH", "")):
+            raise SystemExit(f"[packer] Required tool '{tool}' not found on PATH (devkitPro).")
+
+    # Build & install forwarder into vendor
+    print("[packer] Ensuring forwarder vendor exefs (make install)...")
+    subprocess.run(["make", "clean"], cwd=str(FORWARDER_DIR), check=False, env=env)
+    subprocess.run(["make", "install"], cwd=str(FORWARDER_DIR), check=True, env=env)
+
+    # Sanity check
+    for name in ("main", "main.npdm"):
+        p = VENDOR_EXEFS / name
+        if not p.exists():
+            raise SystemExit(f"[forwarder] install failed (missing {p})")
+
+
+def _stage_vendor_exefs(exefs_dst: Path) -> None:
+    """Copy vendor exefs/main + main.npdm into the staging exefs/."""
+    exefs_dst.mkdir(parents=True, exist_ok=True)
+    for name in ("main", "main.npdm"):
+        src = VENDOR_EXEFS / name
+        if not src.exists():
+            raise SystemExit(f"[nsp] missing vendor exefs file: {src}")
+        shutil.copy2(src, exefs_dst / name)
+
 
 def _compute_title_id(platform: str, rom_path: Path, titleid_base: Optional[str]) -> str:
     h = hashlib.sha1(f"{platform}|{rom_path.name}".encode("utf-8")).hexdigest()
@@ -168,23 +219,12 @@ def _compute_title_id(platform: str, rom_path: Path, titleid_base: Optional[str]
         tid = (tid + h)[:16]
     return tid
 
-def _ensure_exefs(stub_dir: Path, exefs_dst: Path) -> None:
-    vendor = stub_dir / "vendor" / "exefs"
-    main = vendor / "main"
-    npdm = vendor / "main.npdm"
-    if not main.exists() or not npdm.exists():
-        raise SystemExit(
-            "[packer] exefs template missing.\n"
-            f"Expected: {main} and {npdm}\n"
-            "Provide loader binaries once (hbloader-style) so forwarders can be packaged."
-        )
-    shutil.copy2(main, exefs_dst / "main")
-    shutil.copy2(npdm, exefs_dst / "main.npdm")
 
 def _write_hbp_config_json(work: Path, title: str, author: str, version: str, title_id: str) -> None:
     cfg = {"title": title, "publisher": author, "version": version, "titleId": title_id}
     with (work / "config.json").open("w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+
 
 def _resolve_nacptool() -> Optional[Path]:
     """
@@ -199,6 +239,7 @@ def _resolve_nacptool() -> Optional[Path]:
             return candidate.resolve()
     found = shutil.which(exe)
     return Path(found) if found else None
+
 
 def _write_control_nacp_bin(nacp_path: Path, title: str, author: str, version: str, title_id: str) -> None:
     """
@@ -230,10 +271,12 @@ def _write_control_nacp_bin(nacp_path: Path, title: str, author: str, version: s
     if not nacp_path.exists() or nacp_path.stat().st_size == 0:
         raise SystemExit("[packer] control.nacp generation failed or produced empty file.")
 
+
 def _copy_icon(src_icon: Path, dest_icon: Path) -> None:
     if not src_icon.exists():
         raise SystemExit(f"[packer] Icon not found: {src_icon}")
     shutil.copy2(src_icon, dest_icon)
+
 
 def _resolve_forwarder_targets(opts: NSPOptions) -> Tuple[str, str]:
     rom_sd = f"sdmc:/roms/{opts.platform}/{opts.rom_path.name}"
@@ -255,10 +298,12 @@ def _resolve_forwarder_targets(opts: NSPOptions) -> Tuple[str, str]:
     else:
         raise SystemExit(f"[packer] Unknown forwarder mode: {opts.forwarder_mode}")
 
+
 def _write_forwarder_romfs(romfs_dir: Path, next_nro_path: str, next_argv: str) -> None:
     romfs_dir.mkdir(parents=True, exist_ok=True)
     (romfs_dir / "nextNroPath").write_text(next_nro_path, encoding="utf-8")
     (romfs_dir / "nextArgv").write_text(next_argv, encoding="utf-8")
+
 
 def _resolve_hacbrewpack_exe() -> Optional[Path]:
     repo_dir = Path(__file__).resolve().parents[2]
@@ -294,16 +339,19 @@ def _resolve_hacbrewpack_exe() -> Optional[Path]:
     exe = shutil.which(exe_name)
     return Path(exe) if exe else None
 
+
 def _suggest_nsp_name(title: str, title_id: str) -> str:
     safe_title = "".join(c for c in title if c.isalnum() or c in " -_.").strip()
     if not safe_title:
         safe_title = "Forwarder"
     return f"{safe_title} [{title_id}].nsp"
 
+
 def _find_first_nsp(root: Path) -> Optional[Path]:
     for p in root.rglob("*.nsp"):
         return p
     return None
+
 
 def _pick_new_nsp(out_dir: Path, before_set: set[Path]) -> Optional[Path]:
     after_set = {p.resolve() for p in out_dir.glob("*.nsp")}
@@ -313,6 +361,7 @@ def _pick_new_nsp(out_dir: Path, before_set: set[Path]) -> Optional[Path]:
     if after_set:
         return max(after_set, key=lambda p: p.stat().st_mtime)
     return None
+
 
 def _shell_quote(s: str) -> str:
     if os.name == "nt":

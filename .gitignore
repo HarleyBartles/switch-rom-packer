@@ -32,6 +32,13 @@ stub/icon.jpg
 stub/icon.png
 stub/build/
 stub/build/*
+stub/vendor/exefs/main
+stub/vendor/exefs/main.npdm
+
+# Forwarder working files
+forwarder/build/
+forwarder/out/
+out/
 
 # HacBrewPack outputs
 *.pfs0
