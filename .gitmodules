@@ -1,0 +1,4 @@
+[submodule "tools/hacbrewpack"]
+	path = tools/hacbrewpack
+	url = https://github.com/pplatoon/hacBrewPack.git
+	ignore = all
