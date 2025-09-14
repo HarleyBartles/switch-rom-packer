@@ -7,7 +7,7 @@ A command-line utility that converts classic ROMs (NES/SNES/Genesis/…​) into
 - Icons are auto-fetched from the [Libretro Thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails) repo  
   (with configurable preference: **logos** by default, or **boxarts**).
 - If no match is found, the packer falls back to a generated initials-based JPEG.
-- **NSP build support is in progress** — the project now vendors [hacBrewPack](https://github.com/The-4n/hacBrewPack) as a submodule.
+- **NSP build support is in progress** — the project now vendors [hacBrewPack](https://github.com/pplatoon/hacBrewPack) as a submodule.
 - Designed to batch through large libraries with minimal config.
 
 > **Project status:** Early WIP (Sep 2025). Working libnx stub + Python packer pipeline + icon auto-fetch are in place.  
