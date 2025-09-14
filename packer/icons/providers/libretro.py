@@ -25,8 +25,8 @@ _CACHE_ROOT.mkdir(parents=True, exist_ok=True)
 # Base URL for Libretro thumbnail packs
 _BASE_URL = "http://thumbnails.libretro.com"
 
-# Search order across Libretro packs
-_SUBDIRS = ["Named_Boxarts", "Named_Titles", "Named_Snaps"]
+# Search order across Libretro packs (prefer clean system logos)
+_SUBDIRS = ["Named_Logos", "Named_Boxarts", "Named_Titles", "Named_Snaps"]
 
 # Articles to ignore at the start of titles
 _ARTICLES = {"the", "a", "an"}
@@ -310,6 +310,7 @@ def search_icon(
     source_name_hint: Optional[str] = None,
     normalize_method: str = "letterbox",  # "letterbox" (default) or "crop"
     bg=(0, 0, 0),
+    subdirs: Optional[list[str]] = None,  # <--- new
 ) -> Optional[Path]:
     """
     Attempt to fetch a Libretro thumbnail for this platform + title.
@@ -326,21 +327,26 @@ def search_icon(
     if debug and preferred_labels:
         print(f"[icons] region preference: {preferred_labels}")
 
+    # choose search order
+    dirs = subdirs if subdirs is not None else _SUBDIRS
+
     # 1) Exact filename variants across subdirs (region-biased first)
-    for subdir in _SUBDIRS:
+    for subdir in dirs:
         hit = _try_exact_variants(platform_url, subdir, title, preferred_labels)
         if hit:
             source_name, data = hit
             cache_jpg = _icon_cache_path(platform, source_name)
             if cache_jpg.exists():
                 return cache_jpg
-            if _png_bytes_to_jpeg_file(data, cache_jpg, normalize_method=normalize_method, bg=bg):
+            if _png_bytes_to_jpeg_file(
+                data, cache_jpg, normalize_method=normalize_method, bg=bg
+            ):
                 if debug:
                     print(f"[icons] exact icon hit in {subdir} for '{title}' -> '{source_name}'")
                 return cache_jpg
 
-    # 2) Fuzzy match over listings (Boxarts first preference)
-    for subdir in _SUBDIRS:
+    # 2) Fuzzy match over listings (search order controls priority)
+    for subdir in dirs:
         names = _list_png_names(platform_url, subdir)
         if not names:
             continue
@@ -356,8 +362,6 @@ def search_icon(
         # prefer region among near ties
         best_raw, best_sc, _ = _prefer_region_among_ties(ranked, preferred_labels, eps=0.02)
 
-        # If the top-scoring item is NOT the preferred region but a preferred-region item exists
-        # among close contenders, switch to that one explicitly:
         if preferred_labels:
             for label in preferred_labels:
                 cand = next((r for r in ranked if label.lower() in r[0].lower()), None)
@@ -374,9 +378,13 @@ def search_icon(
 
             url = f"{_BASE_URL}/{platform_url}/{subdir}/{best_raw}.png"
             data = _download_bytes(url)
-            if data and _png_bytes_to_jpeg_file(data, preferred_cache, normalize_method=normalize_method, bg=bg):
+            if data and _png_bytes_to_jpeg_file(
+                data, preferred_cache, normalize_method=normalize_method, bg=bg
+            ):
                 if debug:
-                    print(f"[icons] matched '{title}' -> '{best_raw}' in {subdir} (score={best_sc:.3f})")
+                    print(
+                        f"[icons] matched '{title}' -> '{best_raw}' in {subdir} (score={best_sc:.3f})"
+                    )
                 return preferred_cache
 
     return None

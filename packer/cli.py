@@ -47,6 +47,12 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--build-nro", dest="build_nro", action=argparse.BooleanOptionalAction, default=True)
     # Accept (and currently ignore) the legacy flag so existing scripts don’t break
     ap.add_argument("--debug-icons", action="store_true", help="Enable extra icon lookup logging (currently verbose by default)")
+    ap.add_argument(
+        "--icon-preference",
+        choices=["logos-first", "boxarts-first"],
+        default="logos-first",
+        help="Choose thumbnail set priority (default: logos-first)."
+    )
     args = ap.parse_args(argv)
 
     rom_root: Path = args.rom_root
@@ -98,7 +104,13 @@ def main(argv: list[str] | None = None) -> None:
         hb_title: str = item["title"]
         alt_titles: List[str] = item["alt_titles"]
 
-        icon_path = find_icon_with_alts(platform, hb_title, alt_titles, source_name_hint=rom_path.name)
+        icon_path = find_icon_with_alts(
+            platform,
+            hb_title,
+            alt_titles,
+            source_name_hint=rom_path.name,
+            preference=args.icon_preference
+        )
 
         # Prepare a fresh RomFS containing only THIS ROM and a one-line TAB-delimited manifest
         _prepare_romfs_for_single_rom(stub_dir, platform, rom_path)
