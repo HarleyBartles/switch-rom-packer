@@ -159,7 +159,7 @@ usage: packer.py [-h] [--build-nro/--no-build-nro] [--build-nsp/--no-build-nsp]
 
 ## Roadmap
 
-### ✅ Done / baseline
+### Done / baseline
 
 - **libnx stub** that reads `filelist.txt` and copies to `/roms/<platform>/<romfile>`.
 - **Python packer** that:
@@ -171,7 +171,7 @@ usage: packer.py [-h] [--build-nro/--no-build-nro] [--build-nsp/--no-build-nsp]
   - **hacBrewPack vendored** as `tools/hacbrewpack/` submodule, wired into NSP build flow.
   - **forwarder/** project builds exefs/main + main.npdm and installs into stub/vendor/exefs.
 
-### 🚧 In progress / next up
+### In progress / next up
 
 1. **NSP forwarder runtime debugging**
    - Fix why NSPs install but only display a grey spinner on hardware.
@@ -190,13 +190,13 @@ usage: packer.py [-h] [--build-nro/--no-build-nro] [--build-nsp/--no-build-nsp]
    - Structured outputs + summary table at the end (counts, failures).
    - CI checks (format, lint, stub compiles).
 
-### 📌 Nice-to-haves
+### Nice-to-haves
 
 - Optional content-hash de-duplication (skip rebuild if ROM+settings unchanged).
 - Simple HTML report of a batch (titles, platforms, icon hits/misses).
 - Pluggable “icon providers” (try multiple FOSS sources in order).
 
-### ❓ Out of scope (for now)
+### Out of scope (for now)
 
 - Live scraping of non-FOSS or rate-limited sources.
 - Multi-ROM compilations in a single title (e.g., collections).
